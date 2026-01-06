@@ -15,6 +15,8 @@ from rich.table import Table
 from . import __version__
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from plugins import PluginRegistry
 
     from core import ConfigManager
@@ -535,6 +537,309 @@ def config_path() -> None:
     """Show configuration file path."""
     config_manager = _get_config_manager()
     console.print(str(config_manager.config_path))
+
+
+# =============================================================================
+# Remote Commands (Phase 3)
+# =============================================================================
+
+remote_app = typer.Typer(
+    name="remote",
+    help="Manage remote host updates.",
+    no_args_is_help=True,
+)
+app.add_typer(remote_app, name="remote")
+
+
+def _get_hosts_config_path() -> Path:
+    """Get the path to the hosts configuration file."""
+    from core import get_config_dir
+
+    return get_config_dir() / "hosts.yaml"
+
+
+@remote_app.command("list")
+def remote_list() -> None:
+    """List configured remote hosts."""
+    from core import RemoteUpdateManager
+
+    manager = RemoteUpdateManager.from_config_file(_get_hosts_config_path())
+    hosts = manager.get_all_hosts()
+
+    if not hosts:
+        console.print("[dim]No remote hosts configured.[/dim]")
+        console.print(f"Add hosts to: {_get_hosts_config_path()}")
+        return
+
+    table = Table(title="Remote Hosts", show_header=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Hostname")
+    table.add_column("User")
+    table.add_column("Port", justify="right")
+
+    for host in hosts:
+        table.add_row(
+            host.name,
+            host.hostname,
+            host.user,
+            str(host.port),
+        )
+
+    console.print(table)
+
+
+@remote_app.command("run")
+def remote_run(
+    hosts: Annotated[
+        list[str],
+        typer.Argument(help="Host names to update."),
+    ],
+    plugins: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--plugin",
+            "-p",
+            help="Specific plugins to run. Can be specified multiple times.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="Simulate updates without making changes.",
+        ),
+    ] = False,
+    parallel: Annotated[
+        bool,
+        typer.Option(
+            "--parallel",
+            help="Run updates on all hosts in parallel.",
+        ),
+    ] = False,
+) -> None:
+    """Run updates on remote hosts."""
+    asyncio.run(_remote_run(hosts, plugins, dry_run, parallel))
+
+
+async def _remote_run(
+    host_names: list[str],
+    plugins: list[str] | None,
+    dry_run: bool,
+    parallel: bool,
+) -> None:
+    """Run remote updates asynchronously."""
+    from core import RemoteUpdateManager
+
+    manager = RemoteUpdateManager.from_config_file(_get_hosts_config_path())
+
+    # Validate hosts exist
+    for name in host_names:
+        if not manager.get_host(name):
+            console.print(f"[red]Error: Host '{name}' not found in configuration[/red]")
+            raise typer.Exit(1)
+
+    console.print(f"Running updates on {len(host_names)} host(s)...")
+    if dry_run:
+        console.print("[yellow]Dry run mode - no changes will be made[/yellow]")
+
+    if parallel:
+        results = await manager.run_update_parallel(host_names, plugins, dry_run)
+    else:
+        results = await manager.run_update_sequential(host_names, plugins, dry_run)
+
+    # Print results
+    console.print()
+    table = Table(title="Remote Update Results", show_header=True)
+    table.add_column("Host", style="cyan")
+    table.add_column("Status", style="bold")
+    table.add_column("Duration", justify="right")
+    table.add_column("Message")
+
+    for result in results:
+        status = "[green]✓ Success[/green]" if result.success else "[red]✗ Failed[/red]"
+        duration = ""
+        if result.end_time and result.start_time:
+            secs = (result.end_time - result.start_time).total_seconds()
+            duration = f"{secs:.1f}s"
+
+        message = result.error_message or ""
+        table.add_row(result.host_name, status, duration, message)
+
+    console.print(table)
+
+
+@remote_app.command("check")
+def remote_check(
+    hosts: Annotated[
+        list[str],
+        typer.Argument(help="Host names to check."),
+    ],
+) -> None:
+    """Check connectivity to remote hosts."""
+    asyncio.run(_remote_check(hosts))
+
+
+async def _remote_check(host_names: list[str]) -> None:
+    """Check remote host connectivity."""
+    from core import RemoteUpdateManager, ResilientRemoteExecutor
+
+    manager = RemoteUpdateManager.from_config_file(_get_hosts_config_path())
+
+    table = Table(title="Connection Status", show_header=True)
+    table.add_column("Host", style="cyan")
+    table.add_column("Status", style="bold")
+
+    for name in host_names:
+        host = manager.get_host(name)
+        if not host:
+            table.add_row(name, "[red]✗ Not configured[/red]")
+            continue
+
+        executor = ResilientRemoteExecutor(host)
+        try:
+            connected = await executor.check_connection()
+            if connected:
+                table.add_row(name, "[green]✓ Connected[/green]")
+            else:
+                table.add_row(name, "[red]✗ Connection failed[/red]")
+        except Exception as e:
+            table.add_row(name, f"[red]✗ {e}[/red]")
+
+    console.print(table)
+
+
+# =============================================================================
+# Schedule Commands (Phase 3)
+# =============================================================================
+
+schedule_app = typer.Typer(
+    name="schedule",
+    help="Manage scheduled updates.",
+    no_args_is_help=True,
+)
+app.add_typer(schedule_app, name="schedule")
+
+
+@schedule_app.command("enable")
+def schedule_enable(
+    interval: Annotated[
+        str,
+        typer.Option(
+            "--interval",
+            "-i",
+            help="Schedule interval: hourly, daily, weekly, monthly, or custom OnCalendar value.",
+        ),
+    ] = "weekly",
+) -> None:
+    """Enable scheduled updates."""
+    from core import ScheduleInterval, get_schedule_manager
+
+    manager = get_schedule_manager()
+
+    # Try to parse as ScheduleInterval
+    try:
+        schedule = ScheduleInterval(interval)
+    except ValueError:
+        # Use as custom OnCalendar value
+        schedule = interval
+
+    try:
+        manager.enable(schedule)
+        console.print(f"[green]Scheduled updates enabled: {interval}[/green]")
+    except Exception as e:
+        console.print(f"[red]Failed to enable schedule: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@schedule_app.command("disable")
+def schedule_disable() -> None:
+    """Disable scheduled updates."""
+    from core import get_schedule_manager
+
+    manager = get_schedule_manager()
+
+    try:
+        manager.disable()
+        console.print("[yellow]Scheduled updates disabled[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Failed to disable schedule: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@schedule_app.command("status")
+def schedule_status() -> None:
+    """Show schedule status."""
+    from core import get_schedule_manager
+
+    manager = get_schedule_manager()
+    status = manager.get_status()
+
+    console.print("[bold]Schedule Status[/bold]")
+    console.print()
+
+    if status.enabled:
+        console.print("  [green]Enabled:[/green] Yes")
+    else:
+        console.print("  [yellow]Enabled:[/yellow] No")
+
+    if status.active:
+        console.print("  [green]Active:[/green] Yes")
+    else:
+        console.print("  [dim]Active:[/dim] No")
+
+    if status.schedule:
+        console.print(f"  [cyan]Schedule:[/cyan] {status.schedule}")
+
+    if status.next_run:
+        console.print(f"  [cyan]Next run:[/cyan] {status.next_run}")
+
+    if status.last_run:
+        console.print(f"  [dim]Last run:[/dim] {status.last_run}")
+
+    if status.last_result:
+        result_style = "green" if status.last_result == "success" else "red"
+        console.print(
+            f"  [dim]Last result:[/dim] [{result_style}]{status.last_result}[/{result_style}]"
+        )
+
+
+@schedule_app.command("run-now")
+def schedule_run_now() -> None:
+    """Trigger an immediate update run."""
+    from core import get_schedule_manager
+
+    manager = get_schedule_manager()
+
+    try:
+        manager.run_now()
+        console.print("[green]Update triggered[/green]")
+    except Exception as e:
+        console.print(f"[red]Failed to trigger update: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@schedule_app.command("logs")
+def schedule_logs(
+    lines: Annotated[
+        int,
+        typer.Option(
+            "--lines",
+            "-n",
+            help="Number of log lines to show.",
+        ),
+    ] = 50,
+) -> None:
+    """Show recent update logs."""
+    from core import get_schedule_manager
+
+    manager = get_schedule_manager()
+    logs = manager.get_logs(lines)
+
+    if logs:
+        console.print(logs)
+    else:
+        console.print("[dim]No logs available[/dim]")
 
 
 if __name__ == "__main__":

@@ -37,6 +37,10 @@ pydantic = "^2.12"
 structlog = "^25.5"
 pyyaml = "^6.0"
 psutil = "^7.0"
+asyncssh = { version = "^2.22", optional = true }
+
+[tool.poetry.extras]
+remote = ["asyncssh"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
@@ -94,7 +98,7 @@ show_column_numbers = true
 pretty = true
 
 [[tool.mypy.overrides]]
-module = ["psutil.*"]
+module = ["psutil.*", "asyncssh.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import shutil
 from abc import abstractmethod
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 
 import structlog
 
@@ -15,6 +17,25 @@ from core.models import ExecutionResult, PluginConfig, PluginResult, PluginStatu
 logger = structlog.get_logger(__name__)
 
 
+class SelfUpdateStatus(str, Enum):
+    """Status of a self-update operation."""
+
+    SUCCESS = "success"
+    NOT_SUPPORTED = "not_supported"
+    ALREADY_LATEST = "already_latest"
+    FAILED = "failed"
+
+
+@dataclass
+class SelfUpdateResult:
+    """Result of a plugin self-update operation."""
+
+    status: SelfUpdateStatus
+    old_version: str | None = None
+    new_version: str | None = None
+    message: str = ""
+
+
 class BasePlugin(UpdatePlugin):
     """Base class for all update plugins with common functionality.
 
@@ -22,6 +43,7 @@ class BasePlugin(UpdatePlugin):
     - Command execution with timeout handling
     - Structured logging
     - Common availability checking
+    - Self-update mechanism (Phase 3)
     """
 
     @property
@@ -259,3 +281,127 @@ class BasePlugin(UpdatePlugin):
             except Exception:
                 pass
             raise TimeoutError(f"Command timed out after {timeout}s") from e
+
+    # =========================================================================
+    # Self-Update Mechanism (Phase 3)
+    # =========================================================================
+
+    @property
+    def supports_self_update(self) -> bool:
+        """Check if this plugin supports self-update.
+
+        Override in subclasses that support self-update.
+
+        Returns:
+            True if self-update is supported, False otherwise.
+        """
+        return False
+
+    @property
+    def current_version(self) -> str | None:
+        """Get the current version of the plugin.
+
+        Override in subclasses to return the actual version.
+
+        Returns:
+            Version string or None if unknown.
+        """
+        return None
+
+    async def check_self_update_available(self) -> tuple[bool, str | None]:
+        """Check if a self-update is available.
+
+        Override in subclasses that support self-update.
+
+        Returns:
+            Tuple of (update_available, new_version).
+        """
+        return False, None
+
+    async def self_update(self, *, force: bool = False) -> SelfUpdateResult:
+        """Perform a self-update of the plugin.
+
+        This method updates the plugin to the latest version. Override
+        in subclasses that support self-update.
+
+        Args:
+            force: If True, update even if already at latest version.
+
+        Returns:
+            SelfUpdateResult with the outcome.
+        """
+        if not self.supports_self_update:
+            return SelfUpdateResult(
+                status=SelfUpdateStatus.NOT_SUPPORTED,
+                message=f"Plugin '{self.name}' does not support self-update",
+            )
+
+        log = logger.bind(plugin=self.name)
+        old_version = self.current_version
+
+        # Check if update is available
+        update_available, new_version = await self.check_self_update_available()
+
+        if not update_available and not force:
+            return SelfUpdateResult(
+                status=SelfUpdateStatus.ALREADY_LATEST,
+                old_version=old_version,
+                new_version=old_version,
+                message="Already at the latest version",
+            )
+
+        log.info("performing_self_update", old_version=old_version, new_version=new_version)
+
+        try:
+            success, message = await self._perform_self_update()
+
+            if success:
+                # Re-check version after update
+                updated_version = self.current_version
+                return SelfUpdateResult(
+                    status=SelfUpdateStatus.SUCCESS,
+                    old_version=old_version,
+                    new_version=updated_version or new_version,
+                    message=message or "Self-update completed successfully",
+                )
+            else:
+                return SelfUpdateResult(
+                    status=SelfUpdateStatus.FAILED,
+                    old_version=old_version,
+                    message=message or "Self-update failed",
+                )
+
+        except Exception as e:
+            log.exception("self_update_error", error=str(e))
+            return SelfUpdateResult(
+                status=SelfUpdateStatus.FAILED,
+                old_version=old_version,
+                message=f"Self-update failed: {e}",
+            )
+
+    async def _perform_self_update(self) -> tuple[bool, str]:
+        """Perform the actual self-update.
+
+        Override in subclasses that support self-update.
+
+        Returns:
+            Tuple of (success, message).
+        """
+        return False, "Self-update not implemented"
+
+    async def self_upgrade(self, *, force: bool = False) -> SelfUpdateResult:
+        """Perform a major version upgrade of the plugin.
+
+        This method upgrades the plugin to a new major version, which may
+        include breaking changes. Override in subclasses that support
+        major version upgrades.
+
+        Args:
+            force: If True, upgrade even if there are warnings.
+
+        Returns:
+            SelfUpdateResult with the outcome.
+        """
+        # Default implementation delegates to self_update
+        # Subclasses can override for different behavior
+        return await self.self_update(force=force)

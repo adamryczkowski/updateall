@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.message import Message
 from textual.reactive import reactive
@@ -491,7 +491,8 @@ class TextualBatchedEventHandler(BatchedEventHandler):
                 )
             elif event.event_type == "completion":
                 success = bool(event.data.get("success", False))
-                packages = int(event.data.get("packages_updated", 0))
+                packages_val = event.data.get("packages_updated", 0)
+                packages = int(packages_val) if isinstance(packages_val, (int, str, float)) else 0
                 error = event.data.get("error_message")
                 self.app.post_message(
                     PluginCompleted(
@@ -677,7 +678,7 @@ class TabbedRunApp(App[None]):
     }
     """
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("left", "previous_tab", "Previous Tab", show=True),
         Binding("right", "next_tab", "Next Tab", show=True),
         Binding("q", "quit", "Quit", show=True),

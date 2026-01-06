@@ -46,3 +46,6 @@ Thumbs.db
 
 # Poetry lock files (in monorepo with path dependencies)
 poetry.lock
+
+# Reference source code for study
+ref/

@@ -130,4 +130,4 @@ Part of that can be configured by configuration file, rather than by interrogati
 ---
 
 *Document created: 2025-12-05*
-*Last updated: 2025-12-05*
+*Last updated: 2026-01-06*

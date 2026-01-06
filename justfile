@@ -78,6 +78,14 @@ clean:
 run *args:
     cd cli && poetry run update-all {{ args }}
 
+# Run the CLI with only mock plugins (for debugging interactive UI)
+run-mock *args:
+    cd cli && UPDATE_ALL_DEBUG_MOCK_ONLY=1 poetry run update-all {{ args }}
+
+# Run interactive mode with mock plugins only
+run-mock-interactive:
+    cd cli && UPDATE_ALL_DEBUG_MOCK_ONLY=1 poetry run update-all run --interactive
+
 # Build all subprojects
 build:
     #!/usr/bin/env bash

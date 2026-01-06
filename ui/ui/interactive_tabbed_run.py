@@ -188,6 +188,7 @@ class InteractiveTabbedApp(App[None]):
 
     TabPane {
         padding: 0;
+        height: 1fr;
     }
 
     #help-text {
@@ -567,8 +568,12 @@ class InteractiveTabbedApp(App[None]):
         successful = sum(1 for data in self.tab_data.values() if data.state == PaneState.SUCCESS)
         failed = sum(1 for data in self.tab_data.values() if data.state == PaneState.FAILED)
 
-        progress = self.query_one("#progress", ProgressBar)
-        progress.update_progress(completed, successful, failed)
+        try:
+            progress = self.query_one("#progress", ProgressBar)
+            progress.update_progress(completed, successful, failed)
+        except Exception:
+            # Progress bar not yet mounted or already unmounted
+            pass
 
     def _check_all_completed(self) -> None:
         """Check if all plugins have completed."""

@@ -16,7 +16,7 @@ from rich.style import Style
 from rich.text import Text
 from textual.reactive import reactive
 from textual.strip import Strip
-from textual.widget import Widget
+from textual.widgets import Static
 
 if TYPE_CHECKING:
     from textual.app import RenderResult
@@ -81,7 +81,7 @@ def ansi_color_to_rich_color(color: str) -> str | None:
     return color
 
 
-class TerminalView(Widget):
+class TerminalView(Static):
     """Textual widget for rendering terminal screen content.
 
     This widget provides:
@@ -183,8 +183,18 @@ class TerminalView(Widget):
         Args:
             data: Bytes to feed (may contain ANSI escape sequences).
         """
+        import logging
+
+        logger = logging.getLogger("terminal_view")
+
         self._terminal_screen.feed(data)
-        self.refresh()
+        logger.debug(f"[{self.id}] feed() called with {len(data)} bytes, updating content")
+
+        # Update the Static widget's content with the rendered terminal lines
+        lines = self.render_terminal_lines()
+        content = Group(*lines)
+        self.update(content)
+        logger.debug(f"[{self.id}] update() called, size={self.size}, region={self.region}")
 
     def resize_terminal(self, columns: int, lines: int) -> None:
         """Resize the terminal screen.
@@ -241,13 +251,13 @@ class TerminalView(Widget):
         """Render the terminal content.
 
         This method is called by Textual to get the widget's content.
-        It returns a Rich Group containing all terminal lines.
+        We return the visual set by update(), not our own rendering.
 
         Returns:
-            A Rich Group containing all terminal lines as Text objects.
+            The visual content set by update().
         """
-        lines = self.render_terminal_lines()
-        return Group(*lines)
+        # Let Static handle rendering - it uses the visual set by update()
+        return super().render()
 
     def render_terminal_lines(self) -> list[Text]:
         """Render the terminal screen as Rich Text objects.

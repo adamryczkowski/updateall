@@ -182,16 +182,20 @@ class PTYSession:
     async def read(self, size: int = 4096, timeout: float | None = None) -> bytes:
         """Read data from the PTY.
 
+        Uses select() to check for data availability before reading, which
+        allows proper timeout handling without blocking the event loop.
+
         Args:
             size: Maximum number of bytes to read.
             timeout: Timeout in seconds, or None for no timeout.
 
         Returns:
-            Bytes read from the PTY.
+            Bytes read from the PTY. Returns empty bytes if no data is
+            available within the timeout period.
 
         Raises:
             PTYNotStartedError: If the session hasn't been started.
-            PTYReadTimeoutError: If the read times out.
+            PTYReadTimeoutError: If the read times out (only when timeout is specified).
         """
         if self._process is None:
             raise PTYNotStartedError("PTY session not started")
@@ -199,22 +203,39 @@ class PTYSession:
         async with self._read_lock:
             loop = asyncio.get_event_loop()
             process = self._process  # Capture for closure
+            fd = process.fd  # Get file descriptor for select
 
-            def _read() -> bytes:
+            def _read_with_select() -> tuple[bytes, bool]:
+                """Read with select to avoid blocking indefinitely.
+
+                Returns:
+                    Tuple of (data, timed_out) where timed_out is True if
+                    select returned with no data available.
+                """
+                import select
+
+                # Use select to check if data is available
+                effective_timeout = timeout if timeout is not None else 0.1
+                readable, _, _ = select.select([fd], [], [], effective_timeout)
+
+                if not readable:
+                    # No data available within timeout
+                    return b"", True
+
                 try:
                     result = process.read(size)
-                    return bytes(result) if result else b""
+                    return bytes(result) if result else b"", False
                 except EOFError:
-                    return b""
+                    return b"", False
 
             try:
-                if timeout is not None:
-                    return await asyncio.wait_for(
-                        loop.run_in_executor(None, _read),
-                        timeout=timeout,
-                    )
-                else:
-                    return await loop.run_in_executor(None, _read)
+                data, timed_out = await loop.run_in_executor(None, _read_with_select)
+                if timed_out and timeout is not None:
+                    # Caller specified a timeout and we hit it
+                    raise PTYReadTimeoutError("Read operation timed out")
+                return data
+            except PTYReadTimeoutError:
+                raise
             except TimeoutError as e:
                 raise PTYReadTimeoutError("Read operation timed out") from e
 

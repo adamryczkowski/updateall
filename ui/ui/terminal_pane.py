@@ -16,10 +16,9 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
-from textual.containers import Vertical
+from textual.containers import Container
 from textual.message import Message
 from textual.reactive import reactive
-from textual.widget import Widget
 from textual.widgets import Static
 
 from ui.input_router import InputRouter
@@ -186,7 +185,7 @@ class PaneStatusBar(Static):
         self.update(text)
 
 
-class TerminalPane(Widget):
+class TerminalPane(Container):
     """Container widget combining TerminalView with status bar and PTY management.
 
     This widget provides:
@@ -209,10 +208,7 @@ class TerminalPane(Widget):
     TerminalPane {
         height: 100%;
         width: 100%;
-    }
-
-    TerminalPane > Vertical {
-        height: 100%;
+        layout: vertical;
     }
 
     TerminalPane TerminalView {
@@ -321,21 +317,20 @@ class TerminalPane(Widget):
 
     def compose(self) -> ComposeResult:
         """Compose the pane layout."""
-        with Vertical():
-            if self.config.show_status_bar:
-                self._status_bar = PaneStatusBar(
-                    self.pane_name,
-                    id=f"status-{self.pane_id}",
-                )
-                yield self._status_bar
-
-            self._terminal_view = TerminalView(
-                columns=self.config.columns,
-                lines=self.config.lines,
-                scrollback_lines=self.config.scrollback_lines,
-                id=f"terminal-{self.pane_id}",
+        if self.config.show_status_bar:
+            self._status_bar = PaneStatusBar(
+                self.pane_name,
+                id=f"status-{self.pane_id}",
             )
-            yield self._terminal_view
+            yield self._status_bar
+
+        self._terminal_view = TerminalView(
+            columns=self.config.columns,
+            lines=self.config.lines,
+            scrollback_lines=self.config.scrollback_lines,
+            id=f"terminal-{self.pane_id}",
+        )
+        yield self._terminal_view
 
     async def on_mount(self) -> None:
         """Handle mount event."""
@@ -441,9 +436,21 @@ class TerminalPane(Widget):
 
     async def _read_loop(self) -> None:
         """Background task to read from PTY and update terminal view."""
+        import logging
+
+        logger = logging.getLogger("terminal_pane")
+
+        logger.debug(f"[{self.pane_id}] _read_loop started")
         manager = await self.get_session_manager()
+        logger.debug(f"[{self.pane_id}] Got session manager: {manager}")
 
         try:
+            read_count = 0
+            # Continue reading while:
+            # 1. Our state is RUNNING (we haven't been stopped externally)
+            # 2. The PTY session exists and is running, OR there might be buffered data
+            session = manager.get_session(self.pane_id)
+
             while self._state == PaneState.RUNNING:
                 try:
                     data = await manager.read_from_session(
@@ -451,13 +458,39 @@ class TerminalPane(Widget):
                         timeout=0.1,
                     )
                     if data:
+                        read_count += 1
+                        logger.debug(
+                            f"[{self.pane_id}] Read #{read_count}: {len(data)} bytes: {data[:50]!r}..."
+                        )
                         if self._terminal_view:
+                            logger.debug(f"[{self.pane_id}] Feeding to terminal_view")
                             self._terminal_view.feed(data)
+                            logger.debug(
+                                f"[{self.pane_id}] Fed to terminal_view, display[0]={self._terminal_view.terminal_display[0][:40]!r}"
+                            )
+                        else:
+                            logger.warning(f"[{self.pane_id}] terminal_view is None!")
                         self.post_message(PaneOutputMessage(self.pane_id, data))
+                    else:
+                        # No data received - check if session is still running
+                        session = manager.get_session(self.pane_id)
+                        if session is None or not session.is_running:
+                            logger.debug(f"[{self.pane_id}] Session ended, breaking read loop")
+                            break
                 except PTYReadTimeoutError:
+                    # Timeout is normal - check if session is still running
+                    session = manager.get_session(self.pane_id)
+                    if session is None or not session.is_running:
+                        logger.debug(
+                            f"[{self.pane_id}] Session ended during timeout, breaking read loop"
+                        )
+                        break
                     continue
-                except Exception:
+                except Exception as e:
+                    logger.exception(f"[{self.pane_id}] Read error: {e}")
                     break
+
+            logger.debug(f"[{self.pane_id}] _read_loop exited, total reads: {read_count}")
 
             # Check exit status
             session = manager.get_session(self.pane_id)

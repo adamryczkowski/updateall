@@ -305,3 +305,326 @@ class TestPluginMessages:
         assert msg.plugin_name == "apt"
         assert msg.success is False
         assert msg.error_message == "Command failed"
+
+
+# =============================================================================
+# Phase 3 - UI Integration Tests
+# =============================================================================
+
+
+class TestPluginProgressMessage:
+    """Tests for PluginProgressMessage (Phase 3)."""
+
+    def test_progress_message_creation(self) -> None:
+        """Test PluginProgressMessage creation."""
+        from ui.tabbed_run import PluginProgressMessage
+
+        msg = PluginProgressMessage(
+            plugin_name="apt",
+            phase="download",
+            percent=45.5,
+            message="Downloading packages...",
+            bytes_downloaded=1024000,
+            bytes_total=2048000,
+        )
+
+        assert msg.plugin_name == "apt"
+        assert msg.phase == "download"
+        assert msg.percent == 45.5
+        assert msg.message == "Downloading packages..."
+        assert msg.bytes_downloaded == 1024000
+        assert msg.bytes_total == 2048000
+
+    def test_progress_message_optional_fields(self) -> None:
+        """Test PluginProgressMessage with optional fields."""
+        from ui.tabbed_run import PluginProgressMessage
+
+        msg = PluginProgressMessage(
+            plugin_name="apt",
+            phase="execute",
+        )
+
+        assert msg.plugin_name == "apt"
+        assert msg.phase == "execute"
+        assert msg.percent is None
+        assert msg.message is None
+
+
+class TestBatchedEvent:
+    """Tests for BatchedEvent (Phase 3)."""
+
+    def test_batched_event_creation(self) -> None:
+        """Test BatchedEvent creation."""
+        from ui.event_handler import BatchedEvent
+
+        event = BatchedEvent(
+            plugin_name="apt",
+            event_type="output",
+            data={"line": "Installing packages..."},
+        )
+
+        assert event.plugin_name == "apt"
+        assert event.event_type == "output"
+        assert event.data["line"] == "Installing packages..."
+        assert event.timestamp is not None
+
+
+class TestCallbackEventHandler:
+    """Tests for CallbackEventHandler (Phase 3)."""
+
+    def test_callback_handler_output(self) -> None:
+        """Test CallbackEventHandler output handling."""
+        from ui.event_handler import CallbackEventHandler
+
+        outputs: list[tuple[str, str, str]] = []
+
+        def on_output(plugin_name: str, line: str, stream: str) -> None:
+            outputs.append((plugin_name, line, stream))
+
+        handler = CallbackEventHandler(on_output=on_output)
+        handler.handle_output("apt", "Installing...", "stdout")
+
+        assert len(outputs) == 1
+        assert outputs[0] == ("apt", "Installing...", "stdout")
+
+    def test_callback_handler_progress(self) -> None:
+        """Test CallbackEventHandler progress handling."""
+        from ui.event_handler import CallbackEventHandler
+
+        progress_updates: list[tuple[str, str, float | None, str | None]] = []
+
+        def on_progress(
+            plugin_name: str, phase: str, percent: float | None, message: str | None
+        ) -> None:
+            progress_updates.append((plugin_name, phase, percent, message))
+
+        handler = CallbackEventHandler(on_progress=on_progress)
+        handler.handle_progress("apt", "download", percent=50.0, message="Downloading...")
+
+        assert len(progress_updates) == 1
+        assert progress_updates[0] == ("apt", "download", 50.0, "Downloading...")
+
+    def test_callback_handler_completion(self) -> None:
+        """Test CallbackEventHandler completion handling."""
+        from ui.event_handler import CallbackEventHandler
+
+        completions: list[tuple[str, bool, int, int, str | None]] = []
+
+        def on_completion(
+            plugin_name: str,
+            success: bool,
+            exit_code: int,
+            packages: int,
+            error: str | None,
+        ) -> None:
+            completions.append((plugin_name, success, exit_code, packages, error))
+
+        handler = CallbackEventHandler(on_completion=on_completion)
+        handler.handle_completion("apt", success=True, exit_code=0, packages_updated=5)
+
+        assert len(completions) == 1
+        assert completions[0] == ("apt", True, 0, 5, None)
+
+
+class TestStreamEventAdapter:
+    """Tests for StreamEventAdapter (Phase 3)."""
+
+    def test_adapter_handles_output_event(self) -> None:
+        """Test StreamEventAdapter handles OutputEvent."""
+        from datetime import UTC, datetime
+
+        from core.streaming import EventType, OutputEvent
+        from ui.event_handler import CallbackEventHandler, StreamEventAdapter
+
+        outputs: list[tuple[str, str, str]] = []
+
+        def on_output(plugin_name: str, line: str, stream: str) -> None:
+            outputs.append((plugin_name, line, stream))
+
+        handler = CallbackEventHandler(on_output=on_output)
+        adapter = StreamEventAdapter(handler)
+
+        event = OutputEvent(
+            event_type=EventType.OUTPUT,
+            plugin_name="apt",
+            timestamp=datetime.now(tz=UTC),
+            line="Installing...",
+            stream="stdout",
+        )
+
+        adapter.handle_event(event)
+
+        assert len(outputs) == 1
+        assert outputs[0] == ("apt", "Installing...", "stdout")
+
+    def test_adapter_handles_progress_event(self) -> None:
+        """Test StreamEventAdapter handles ProgressEvent."""
+        from datetime import UTC, datetime
+
+        from core.streaming import EventType, Phase, ProgressEvent
+        from ui.event_handler import CallbackEventHandler, StreamEventAdapter
+
+        progress_updates: list[tuple[str, str, float | None, str | None]] = []
+
+        def on_progress(
+            plugin_name: str, phase: str, percent: float | None, message: str | None
+        ) -> None:
+            progress_updates.append((plugin_name, phase, percent, message))
+
+        handler = CallbackEventHandler(on_progress=on_progress)
+        adapter = StreamEventAdapter(handler)
+
+        event = ProgressEvent(
+            event_type=EventType.PROGRESS,
+            plugin_name="apt",
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.DOWNLOAD,
+            percent=75.0,
+            message="Downloading...",
+        )
+
+        adapter.handle_event(event)
+
+        assert len(progress_updates) == 1
+        assert progress_updates[0] == ("apt", "download", 75.0, "Downloading...")
+
+
+class TestSudoStatus:
+    """Tests for SudoStatus enum (Phase 3)."""
+
+    def test_sudo_status_values(self) -> None:
+        """Test SudoStatus enum values."""
+        from ui.sudo import SudoStatus
+
+        assert SudoStatus.AUTHENTICATED.value == "authenticated"
+        assert SudoStatus.NOT_AUTHENTICATED.value == "not_authenticated"
+        assert SudoStatus.NOT_AVAILABLE.value == "not_available"
+        assert SudoStatus.PASSWORD_REQUIRED.value == "password_required"
+        assert SudoStatus.NO_SUDO_REQUIRED.value == "no_sudo_required"
+
+
+class TestSudoCheckResult:
+    """Tests for SudoCheckResult (Phase 3)."""
+
+    def test_sudo_check_result_creation(self) -> None:
+        """Test SudoCheckResult creation."""
+        from ui.sudo import SudoCheckResult, SudoStatus
+
+        result = SudoCheckResult(
+            status=SudoStatus.AUTHENTICATED,
+            message="Sudo credentials are cached",
+            user="testuser",
+        )
+
+        assert result.status == SudoStatus.AUTHENTICATED
+        assert result.message == "Sudo credentials are cached"
+        assert result.user == "testuser"
+
+
+class TestStatusBarProgress:
+    """Tests for StatusBar progress features (Phase 3)."""
+
+    def test_status_bar_progress_bar_rendering(self) -> None:
+        """Test StatusBar progress bar rendering."""
+        from ui.tabbed_run import StatusBar
+
+        bar = StatusBar("apt")
+
+        # Test progress bar rendering
+        result = bar._render_progress_bar(50.0, width=10)
+
+        assert "█" in result
+        assert "░" in result
+        assert len(result) == 12  # 10 chars + 2 brackets
+
+    def test_status_bar_progress_bar_full(self) -> None:
+        """Test StatusBar progress bar at 100%."""
+        from ui.tabbed_run import StatusBar
+
+        bar = StatusBar("apt")
+
+        result = bar._render_progress_bar(100.0, width=10)
+
+        assert "░" not in result
+        assert result.count("█") == 10
+
+    def test_status_bar_progress_bar_empty(self) -> None:
+        """Test StatusBar progress bar at 0%."""
+        from ui.tabbed_run import StatusBar
+
+        bar = StatusBar("apt")
+
+        result = bar._render_progress_bar(0.0, width=10)
+
+        assert "█" not in result
+        assert result.count("░") == 10
+
+
+class TestProgressPanelDownload:
+    """Tests for ProgressPanel download features (Phase 3)."""
+
+    def test_progress_panel_download_fields(self) -> None:
+        """Test ProgressPanel download progress fields.
+
+        Note: We can't call update_download_progress directly because it
+        triggers _refresh_display() which requires an active Textual app.
+        Instead, we test that the fields can be set and read correctly.
+        """
+        from ui.tabbed_run import ProgressPanel
+
+        panel = ProgressPanel(total_plugins=3)
+
+        # Set fields directly (as update_download_progress would)
+        panel.total_bytes_downloaded = 50 * 1024 * 1024  # 50 MB
+        panel.total_bytes_to_download = 100 * 1024 * 1024  # 100 MB
+
+        assert panel.total_bytes_downloaded == 50 * 1024 * 1024
+        assert panel.total_bytes_to_download == 100 * 1024 * 1024
+
+    def test_progress_panel_initial_values(self) -> None:
+        """Test ProgressPanel initial download values."""
+        from ui.tabbed_run import ProgressPanel
+
+        panel = ProgressPanel(total_plugins=5)
+
+        assert panel.total_plugins == 5
+        assert panel.completed_plugins == 0
+        assert panel.successful_plugins == 0
+        assert panel.failed_plugins == 0
+        assert panel.total_bytes_downloaded == 0
+        assert panel.total_bytes_to_download == 0
+
+
+class TestPluginTabProgress:
+    """Tests for PluginTab progress fields (Phase 3)."""
+
+    def test_plugin_tab_progress_fields(self) -> None:
+        """Test PluginTab progress tracking fields."""
+        from unittest.mock import MagicMock
+
+        from ui.tabbed_run import PluginTab
+
+        mock_plugin = MagicMock()
+        mock_plugin.name = "apt"
+
+        tab = PluginTab(name="apt", plugin=mock_plugin)
+
+        # Check default values
+        assert tab.current_phase == ""
+        assert tab.progress_percent == 0.0
+        assert tab.progress_message == ""
+        assert tab.bytes_downloaded == 0
+        assert tab.bytes_total == 0
+
+        # Update values
+        tab.current_phase = "download"
+        tab.progress_percent = 50.0
+        tab.progress_message = "Downloading..."
+        tab.bytes_downloaded = 1024000
+        tab.bytes_total = 2048000
+
+        assert tab.current_phase == "download"
+        assert tab.progress_percent == 50.0
+        assert tab.progress_message == "Downloading..."
+        assert tab.bytes_downloaded == 1024000
+        assert tab.bytes_total == 2048000

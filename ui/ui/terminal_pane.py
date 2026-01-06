@@ -217,6 +217,7 @@ class TerminalPane(Widget):
 
     TerminalPane TerminalView {
         height: 1fr;
+        min-height: 10;
         border: solid $primary;
     }
 

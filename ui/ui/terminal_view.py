@@ -105,6 +105,7 @@ class TerminalView(Widget):
     TerminalView {
         background: $surface;
         color: $text;
+        min-height: 10;
     }
     """
 

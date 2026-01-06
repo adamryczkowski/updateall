@@ -17,24 +17,40 @@ from core.models import (
     RunResult,
     SystemConfig,
 )
+from core.mutex import MutexInfo, MutexManager, StandardMutexes
 from core.orchestrator import Orchestrator
+from core.parallel_orchestrator import ParallelOrchestrator
+from core.resource import ResourceContext, ResourceController, ResourceLimits, ResourceUsage
+from core.scheduler import ExecutionDAG, PluginNode, Scheduler, SchedulingError
 
 __version__ = "0.1.0"
 
 __all__ = [
     "ConfigLoader",
     "ConfigManager",
+    "ExecutionDAG",
     "ExecutionResult",
     "ExecutionSummary",
     "GlobalConfig",
     "LogLevel",
+    "MutexInfo",
+    "MutexManager",
     "Orchestrator",
+    "ParallelOrchestrator",
     "PluginConfig",
     "PluginExecutor",
     "PluginMetadata",
+    "PluginNode",
     "PluginResult",
     "PluginStatus",
+    "ResourceContext",
+    "ResourceController",
+    "ResourceLimits",
+    "ResourceUsage",
     "RunResult",
+    "Scheduler",
+    "SchedulingError",
+    "StandardMutexes",
     "SystemConfig",
     "UpdatePlugin",
     "YamlConfigLoader",

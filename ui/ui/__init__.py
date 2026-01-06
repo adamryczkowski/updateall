@@ -15,6 +15,11 @@ Phase 2 - Terminal Emulation adds:
 - TerminalScreen: pyte-based terminal emulation with scrollback
 - TerminalView: Textual widget for rendering terminal content
 - See docs/interactive-tabs-implementation-plan.md
+
+Phase 3 - Input Handling adds:
+- KeyBindings: Configurable key binding system
+- InputRouter: Keyboard input routing between app and PTY
+- See docs/interactive-tabs-implementation-plan.md
 """
 
 from ui.event_handler import (
@@ -24,6 +29,8 @@ from ui.event_handler import (
     StreamEventAdapter,
     UIEventHandler,
 )
+from ui.input_router import InputRouter, RouteTarget
+from ui.key_bindings import InvalidKeyError, KeyBindings, normalize_key
 from ui.panels import SummaryPanel
 from ui.progress import ProgressDisplay
 from ui.pty_manager import PTYSessionManager, SessionNotFoundError
@@ -59,6 +66,9 @@ __all__ = [
     "BatchedEvent",
     "BatchedEventHandler",
     "CallbackEventHandler",
+    "InputRouter",
+    "InvalidKeyError",
+    "KeyBindings",
     "PTYAlreadyStartedError",
     "PTYError",
     "PTYNotStartedError",
@@ -69,6 +79,7 @@ __all__ = [
     "PluginState",
     "ProgressDisplay",
     "ResultsTable",
+    "RouteTarget",
     "SessionNotFoundError",
     "StreamEventAdapter",
     "StyledChar",
@@ -86,6 +97,7 @@ __all__ = [
     "check_sudo_status",
     "ensure_sudo_authenticated",
     "is_pty_available",
+    "normalize_key",
     "refresh_sudo_timestamp",
     "run_with_tabbed_ui",
 ]

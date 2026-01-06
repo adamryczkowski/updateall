@@ -220,10 +220,10 @@ A container widget that:
 4. Tab switching shortcuts
 
 **Deliverables:**
-- [ ] `ui/ui/input_router.py` - Input routing
-- [ ] `ui/ui/key_bindings.py` - Key binding configuration
-- [ ] `ui/tests/test_input_router.py` - Input tests
-- [ ] `ui/tests/test_key_bindings.py` - Binding tests
+- [x] `ui/ui/input_router.py` - Input routing
+- [x] `ui/ui/key_bindings.py` - Key binding configuration
+- [x] `ui/tests/test_input_router.py` - Input tests (44 tests)
+- [x] `ui/tests/test_key_bindings.py` - Binding tests (32 tests)
 
 ### Phase 4: Integration (Week 7-8)
 

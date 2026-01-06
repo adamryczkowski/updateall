@@ -63,6 +63,14 @@ class TestGlobalConfig:
         assert config.dry_run is False
         assert config.stats_enabled is True
         assert config.stats_file is None
+        # Phase 5 - Streaming feature flag
+        assert config.streaming_enabled is True
+
+    def test_streaming_enabled_can_be_disabled(self) -> None:
+        """Test streaming_enabled can be set to False for fallback mode."""
+        config = GlobalConfig(streaming_enabled=False)
+
+        assert config.streaming_enabled is False
 
 
 class TestExecutionResult:

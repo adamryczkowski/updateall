@@ -5,6 +5,15 @@ Core library providing models, interfaces, and utilities for the update-all syst
 
 from core.config import ConfigManager, YamlConfigLoader, get_config_dir, get_default_config_path
 from core.interfaces import ConfigLoader, PluginExecutor, UpdatePlugin
+from core.metrics import (
+    LatencyTimer,
+    MetricLevel,
+    MetricsCollector,
+    MetricValue,
+    PluginMetrics,
+    get_metrics_collector,
+    set_metrics_collector,
+)
 from core.models import (
     DownloadEstimate,
     ExecutionResult,
@@ -99,7 +108,11 @@ __all__ = [
     "ExecutionSummary",
     "GlobalConfig",
     "HostConfig",
+    "LatencyTimer",
     "LogLevel",
+    "MetricLevel",
+    "MetricValue",
+    "MetricsCollector",
     "MutexInfo",
     "MutexManager",
     "MutexState",
@@ -116,6 +129,7 @@ __all__ = [
     "PluginConfig",
     "PluginExecutor",
     "PluginMetadata",
+    "PluginMetrics",
     "PluginNode",
     "PluginResult",
     "PluginSnapshot",
@@ -157,11 +171,13 @@ __all__ = [
     "batched_stream",
     "get_config_dir",
     "get_default_config_path",
+    "get_metrics_collector",
     "get_notification_manager",
     "get_schedule_manager",
     "load_notification_config",
     "parse_event",
     "parse_progress_line",
     "safe_consume_stream",
+    "set_metrics_collector",
     "timeout_stream",
 ]

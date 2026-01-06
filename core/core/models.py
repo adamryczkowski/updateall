@@ -63,6 +63,12 @@ class GlobalConfig(BaseModel):
     stats_enabled: bool = Field(default=True, description="Enable statistics collection")
     stats_file: Path | None = Field(default=None, description="Path to statistics file")
 
+    # Phase 5 - Streaming Feature Flag (Risk I3 mitigation)
+    streaming_enabled: bool = Field(
+        default=True,
+        description="Enable streaming output from plugins. Set to False to fall back to batch mode.",
+    )
+
 
 class SystemConfig(BaseModel):
     """Complete system configuration."""

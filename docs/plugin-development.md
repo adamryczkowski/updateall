@@ -13,6 +13,7 @@ This guide explains how to create plugins for Update-All. Plugins extend Update-
 - [External Plugins](#external-plugins)
 - [Testing Plugins](#testing-plugins)
 - [Publishing Plugins](#publishing-plugins)
+- [Configuration Options](#configuration-options)
 
 ## Overview
 
@@ -1039,8 +1040,95 @@ See [`plugins/plugins/apt.py`](../plugins/plugins/apt.py) for a complete example
 2. Ensure the user has sudo access
 3. Consider using polkit for GUI environments
 
+## Configuration Options
+
+### Streaming Feature Flag
+
+The `streaming_enabled` configuration option controls whether plugins use streaming output or fall back to batch mode. This is useful for:
+- Debugging streaming issues
+- Environments where streaming causes problems
+- Gradual rollout of streaming features
+
+```yaml
+# config.yaml
+global:
+  streaming_enabled: true  # Default: true
+```
+
+In code:
+
+```python
+from core.models import GlobalConfig
+
+config = GlobalConfig(streaming_enabled=False)  # Disable streaming
+
+# Check if streaming is enabled
+if config.streaming_enabled:
+    async for event in plugin.execute_streaming():
+        handle_event(event)
+else:
+    result = await plugin.execute()
+    display_result(result)
+```
+
+### Monitoring and Metrics
+
+Update-All includes a metrics system for production monitoring. Plugins can integrate with this system to track performance.
+
+#### Using the Metrics Collector
+
+```python
+from core.metrics import (
+    LatencyTimer,
+    MetricsCollector,
+    get_metrics_collector,
+)
+
+# Get the global metrics collector
+collector = get_metrics_collector()
+
+# Track plugin execution
+collector.start_plugin_execution("my-plugin")
+
+async for event in plugin.execute_streaming():
+    collector.increment_event_count("my-plugin")
+
+    # Track UI update latency
+    with LatencyTimer() as timer:
+        update_ui(event)
+    collector.record_ui_latency(timer.elapsed_ms)
+
+collector.end_plugin_execution("my-plugin")
+```
+
+#### Metric Thresholds
+
+The following thresholds are used for alerting:
+
+| Metric | Target | Alert |
+|--------|--------|-------|
+| Memory per plugin | < 50 MB | > 100 MB |
+| UI update latency | < 50 ms | > 200 ms |
+| Event queue depth | < 100 | > 500 |
+| Test coverage | > 80% | < 70% |
+
+#### Recording Custom Metrics
+
+```python
+from core.metrics import MetricValue, MetricLevel
+
+collector.record_metric(MetricValue(
+    name="custom_metric",
+    value=42.0,
+    unit="count",
+    level=MetricLevel.OK,
+    labels={"plugin": "my-plugin"},
+))
+```
+
 ## Getting Help
 
 - Check existing plugins in `plugins/plugins/` for examples
 - Review the [implementation plan](update-all-python-plan.md) for architecture details
+- Review the [architecture refinement plan](update-all-architecture-refinement-plan.md) for streaming details
 - Open an issue on GitHub for questions

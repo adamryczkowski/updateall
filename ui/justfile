@@ -1,0 +1,4 @@
+# UI subproject justfile
+# Rich terminal UI components for update-all system
+
+import '../justfile-common-subproject.just'

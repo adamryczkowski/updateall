@@ -1,0 +1,73 @@
+= Update-All UI
+:toc:
+:toc-placement: preamble
+
+Rich terminal UI components for the update-all system.
+
+== Overview
+
+This package provides terminal UI components using the Rich library:
+
+* **Progress display** - Real-time progress bars and status updates
+* **Tables** - Formatted output for plugin status and results
+* **Panels** - Information panels and summaries
+* **Live updates** - Streaming output during updates
+
+== Components
+
+=== ProgressDisplay
+
+Real-time progress display for update operations:
+
+[source,python]
+----
+from ui.progress import ProgressDisplay
+
+async with ProgressDisplay() as display:
+    display.start_plugin("apt")
+    display.update_status("apt", "Updating package lists...")
+    display.complete_plugin("apt", success=True)
+----
+
+=== ResultsTable
+
+Formatted table for displaying update results:
+
+[source,python]
+----
+from ui.tables import ResultsTable
+
+table = ResultsTable()
+table.add_result(plugin_result)
+table.render()
+----
+
+=== SummaryPanel
+
+Summary panel showing overall update status:
+
+[source,python]
+----
+from ui.panels import SummaryPanel
+
+panel = SummaryPanel(results)
+panel.render()
+----
+
+== Development
+
+[source,bash]
+----
+# Install dependencies
+just install
+
+# Run tests
+just test
+
+# Run linting
+just lint
+----
+
+== License
+
+MIT License

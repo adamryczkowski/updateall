@@ -1,0 +1,75 @@
+= Update-All Plugins
+:toc:
+:toc-placement: preamble
+
+Plugin implementations for the update-all system.
+
+== Overview
+
+This package contains the plugin implementations for various package managers:
+
+* **apt** - Debian/Ubuntu package manager
+* **pipx** - Python application installer
+* **flatpak** - Linux application sandboxing and distribution
+
+== Architecture
+
+Each plugin implements the `UpdatePlugin` interface from `update-all-core`:
+
+[source,python]
+----
+from core.interfaces import UpdatePlugin
+
+class AptPlugin(UpdatePlugin):
+    """Plugin for apt package manager."""
+
+    @property
+    def name(self) -> str:
+        return "apt"
+
+    async def check_available(self) -> bool:
+        # Check if apt is available on the system
+        ...
+
+    async def run_update(self, config: PluginConfig) -> PluginResult:
+        # Execute apt update && apt upgrade
+        ...
+----
+
+== Plugin Registry
+
+Plugins are registered via entry points in `pyproject.toml`:
+
+[source,toml]
+----
+[project.entry-points."update_all.plugins"]
+apt = "plugins.apt:AptPlugin"
+pipx = "plugins.pipx:PipxPlugin"
+flatpak = "plugins.flatpak:FlatpakPlugin"
+----
+
+== Development
+
+[source,bash]
+----
+# Install dependencies
+just install
+
+# Run tests
+just test
+
+# Run linting
+just lint
+----
+
+== Testing
+
+Each plugin has comprehensive tests including:
+
+* Unit tests with mocked subprocess calls
+* Integration tests (optional, require actual package managers)
+* Timeout handling tests
+
+== License
+
+MIT License

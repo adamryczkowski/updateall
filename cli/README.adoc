@@ -1,0 +1,63 @@
+= Update-All CLI
+:toc: macro
+:icons: font
+
+Command-line interface for the update-all system.
+
+toc::[]
+
+== Overview
+
+The CLI provides a user-friendly interface for:
+
+* Running system updates
+* Managing plugins
+* Viewing update history and statistics
+* Configuration management
+
+== Installation
+
+[source,bash]
+----
+poetry install
+----
+
+== Usage
+
+[source,bash]
+----
+# Run all updates
+update-all run
+
+# Run specific plugins
+update-all run --plugin apt --plugin pipx
+
+# Dry run (simulate updates)
+update-all run --dry-run
+
+# List available plugins
+update-all plugins list
+
+# Show update history
+update-all history
+
+# Show help
+update-all --help
+----
+
+== Development
+
+[source,bash]
+----
+# Run tests
+just test
+
+# Run linters
+just lint
+
+# Format code
+just fmt
+
+# Run all validations
+just validate
+----

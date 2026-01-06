@@ -1,0 +1,132 @@
+"""Core data models for update-all system.
+
+This module defines Pydantic models for configuration, plugin definitions,
+and execution results.
+"""
+
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class PluginStatus(str, Enum):
+    """Status of a plugin execution."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    TIMEOUT = "timeout"
+
+
+# Alias for backward compatibility with plugins
+UpdateStatus = PluginStatus
+
+
+class LogLevel(str, Enum):
+    """Log level for plugin output."""
+
+    DEBUG = "debug"
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class PluginConfig(BaseModel):
+    """Configuration for a single plugin."""
+
+    name: str = Field(..., description="Unique plugin identifier")
+    enabled: bool = Field(default=True, description="Whether the plugin is enabled")
+    timeout_seconds: int = Field(default=300, description="Execution timeout in seconds")
+    retry_count: int = Field(default=0, description="Number of retries on failure")
+    requires_sudo: bool = Field(default=False, description="Whether plugin requires sudo")
+    dependencies: list[str] = Field(
+        default_factory=list, description="List of plugin names this plugin depends on"
+    )
+    options: dict[str, Any] = Field(
+        default_factory=dict, description="Plugin-specific configuration options"
+    )
+
+
+class GlobalConfig(BaseModel):
+    """Global configuration for update-all system."""
+
+    log_level: LogLevel = Field(default=LogLevel.INFO, description="Global log level")
+    log_file: Path | None = Field(default=None, description="Path to log file")
+    parallel_execution: bool = Field(default=False, description="Enable parallel plugin execution")
+    max_parallel: int = Field(default=4, description="Maximum parallel executions")
+    dry_run: bool = Field(default=False, description="Simulate updates without executing")
+    stats_enabled: bool = Field(default=True, description="Enable statistics collection")
+    stats_file: Path | None = Field(default=None, description="Path to statistics file")
+
+
+class SystemConfig(BaseModel):
+    """Complete system configuration."""
+
+    global_config: GlobalConfig = Field(default_factory=GlobalConfig)
+    plugins: dict[str, PluginConfig] = Field(default_factory=dict)
+
+
+class PluginResult(BaseModel):
+    """Result of a plugin update operation.
+
+    Used by plugins to report the outcome of an update.
+    """
+
+    plugin_name: str = Field(..., description="Name of the plugin")
+    status: PluginStatus = Field(..., description="Update status")
+    start_time: datetime = Field(..., description="Update start time")
+    end_time: datetime | None = Field(default=None, description="Update end time")
+    output: str = Field(default="", description="Command output")
+    error_message: str | None = Field(default=None, description="Error message if failed")
+    packages_updated: int = Field(default=0, description="Number of packages updated")
+
+
+class ExecutionResult(BaseModel):
+    """Result of a single plugin execution."""
+
+    plugin_name: str = Field(..., description="Name of the executed plugin")
+    status: PluginStatus = Field(..., description="Execution status")
+    start_time: datetime = Field(..., description="Execution start time")
+    end_time: datetime | None = Field(default=None, description="Execution end time")
+    duration_seconds: float | None = Field(default=None, description="Execution duration")
+    exit_code: int | None = Field(default=None, description="Process exit code")
+    stdout: str = Field(default="", description="Standard output")
+    stderr: str = Field(default="", description="Standard error")
+    error_message: str | None = Field(default=None, description="Error message if failed")
+    packages_updated: int = Field(default=0, description="Number of packages updated")
+    packages_info: list[dict[str, Any]] = Field(
+        default_factory=list, description="Detailed package update information"
+    )
+
+
+class ExecutionSummary(BaseModel):
+    """Summary of a complete update run."""
+
+    run_id: str = Field(..., description="Unique run identifier")
+    start_time: datetime = Field(..., description="Run start time")
+    end_time: datetime | None = Field(default=None, description="Run end time")
+    total_duration_seconds: float | None = Field(default=None, description="Total duration")
+    results: list[ExecutionResult] = Field(default_factory=list)
+    total_plugins: int = Field(default=0, description="Total number of plugins")
+    successful_plugins: int = Field(default=0, description="Number of successful plugins")
+    failed_plugins: int = Field(default=0, description="Number of failed plugins")
+    skipped_plugins: int = Field(default=0, description="Number of skipped plugins")
+
+
+class PluginMetadata(BaseModel):
+    """Metadata about a plugin."""
+
+    name: str = Field(..., description="Plugin name")
+    version: str = Field(default="0.1.0", description="Plugin version")
+    description: str = Field(default="", description="Plugin description")
+    author: str = Field(default="", description="Plugin author")
+    requires_sudo: bool = Field(default=False, description="Whether plugin requires sudo")
+    supported_platforms: list[str] = Field(
+        default_factory=lambda: ["linux"], description="Supported platforms"
+    )
+    dependencies: list[str] = Field(default_factory=list, description="Plugin dependencies")

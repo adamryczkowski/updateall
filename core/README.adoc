@@ -1,0 +1,47 @@
+= Update-All Core Library
+:toc: macro
+:icons: font
+
+Core library for the update-all system, providing models, interfaces, and utilities.
+
+toc::[]
+
+== Overview
+
+The core library provides:
+
+* **Models**: Pydantic models for configuration, plugin definitions, and execution results
+* **Interfaces**: Abstract base classes for plugins and executors
+* **Utilities**: Logging, configuration loading, and common helpers
+
+== Installation
+
+[source,bash]
+----
+poetry install
+----
+
+== Usage
+
+[source,python]
+----
+from core.models import PluginConfig, ExecutionResult
+from core.interfaces import UpdatePlugin
+----
+
+== Development
+
+[source,bash]
+----
+# Run tests
+just test
+
+# Run linters
+just lint
+
+# Format code
+just fmt
+
+# Run all validations
+just validate
+----

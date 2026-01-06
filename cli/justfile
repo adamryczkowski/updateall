@@ -1,0 +1,4 @@
+# CLI subproject justfile
+# Import common recipes from root
+
+import '../justfile-common-subproject.just'

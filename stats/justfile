@@ -1,0 +1,4 @@
+# Stats subproject justfile
+# Statistics and history tracking for update-all system
+
+import '../justfile-common-subproject.just'

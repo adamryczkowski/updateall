@@ -1,0 +1,4 @@
+# Plugins subproject justfile
+# Plugin implementations for update-all system
+
+import '../justfile-common-subproject.just'

@@ -1,0 +1,81 @@
+"""Flatpak package manager plugin."""
+
+from __future__ import annotations
+
+import re
+from typing import TYPE_CHECKING
+
+from plugins.base import BasePlugin
+
+if TYPE_CHECKING:
+    from core.models import PluginConfig
+
+
+class FlatpakPlugin(BasePlugin):
+    """Plugin for Flatpak application manager.
+
+    Executes:
+    1. flatpak update -y - update all installed applications
+    """
+
+    @property
+    def name(self) -> str:
+        """Return the plugin name."""
+        return "flatpak"
+
+    @property
+    def command(self) -> str:
+        """Return the main command."""
+        return "flatpak"
+
+    @property
+    def description(self) -> str:
+        """Return plugin description."""
+        return "Flatpak application manager"
+
+    async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
+        """Execute flatpak update.
+
+        Args:
+            config: Plugin configuration.
+
+        Returns:
+            Tuple of (output, error_message).
+        """
+        return_code, stdout, stderr = await self._run_command(
+            ["flatpak", "update", "-y", "--noninteractive"],
+            timeout=config.timeout,
+            sudo=False,  # flatpak can run as user
+        )
+
+        output = f"=== flatpak update ===\n{stdout}"
+
+        if return_code != 0:
+            # Check for common non-error conditions
+            if "Nothing to do" in stdout or "Nothing to do" in stderr:
+                return output, None
+            return output, f"flatpak update failed: {stderr}"
+
+        return output, None
+
+    def _count_updated_packages(self, output: str) -> int:
+        """Count updated packages from flatpak output.
+
+        Looks for patterns like:
+        - "Updating app/org.example.App"
+        - Lines with version changes
+
+        Args:
+            output: Command output.
+
+        Returns:
+            Number of packages updated.
+        """
+        # Count "Updating" lines
+        updating_count = len(re.findall(r"^Updating\s+", output, re.MULTILINE))
+
+        if updating_count == 0:
+            # Alternative: count lines with arrow indicating version change
+            updating_count = len(re.findall(r"→", output))
+
+        return updating_count

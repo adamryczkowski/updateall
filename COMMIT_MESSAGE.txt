@@ -1,0 +1,73 @@
+feat: Initialize update-all Python monorepo for Milestone 1 (MVP)
+
+This commit sets up the complete project structure for the update-all
+system - a plugin-driven system update orchestrator for Linux.
+
+## Project Structure
+
+The project is organized as a monorepo with 5 independent Poetry subprojects:
+
+- **core**: Core models, interfaces, and abstractions
+- **cli**: Typer-based command-line interface
+- **plugins**: Update plugins for apt, pipx, flatpak
+- **ui**: Rich-based terminal UI components
+- **stats**: Update history and statistics tracking
+
+## Key Features Implemented
+
+### Core Module
+- Pydantic models for configuration (PluginConfig, GlobalConfig, SystemConfig)
+- Execution result models (ExecutionResult, PluginResult, ExecutionSummary)
+- Abstract plugin interface (UpdatePlugin) with lifecycle hooks
+- Plugin executor and config loader interfaces
+
+### CLI Module
+- Main Typer application with rich markup support
+- Commands: run, status, history
+- Subcommands: plugins (list, enable, disable), config (show, init)
+- Version flag with callback
+
+### Plugins Module
+- BasePlugin abstract class with common functionality
+- Command execution with timeout handling and sudo support
+- Concrete plugins: AptPlugin, PipxPlugin, FlatpakPlugin
+- Plugin registry with entry point discovery support
+
+### UI Module
+- ProgressDisplay: Live progress tracking with Rich
+- ResultsTable: Formatted results display
+- SummaryPanel: Update run summary with statistics
+
+### Stats Module
+- HistoryStore: JSON-based persistent history storage
+- StatsCalculator: Aggregate statistics calculation
+- XDG Base Directory Specification compliance
+
+## Development Infrastructure
+
+- Poetry 2.x with PEP 621 project metadata
+- Ruff for linting and formatting (v0.14.10)
+- pytest with asyncio support and coverage
+- pre-commit hooks (ruff, codespell, check-yaml)
+- Justfile for task automation with shared recipes
+- Comprehensive test suites (75 tests total, all passing)
+
+## Dependencies (Current Versions)
+
+- Python 3.12+
+- Typer 0.21.0
+- Rich 14.2.0
+- Pydantic 2.12.5
+- structlog 25.5.0
+- pytest 8.4.2
+- ruff 0.14.10
+
+## Validation
+
+All subprojects pass:
+- Ruff linting (no errors)
+- Ruff formatting (all files formatted)
+- pytest tests (75 tests passing)
+
+This implements the foundation for Milestone 1 (MVP) as described in
+docs/update-all-python-plan.md.

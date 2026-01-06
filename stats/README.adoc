@@ -1,0 +1,84 @@
+= Update-All Stats
+:toc:
+:toc-placement: preamble
+
+Statistics and history tracking for the update-all system.
+
+== Overview
+
+This package provides:
+
+* **History storage** - Persistent storage of update run history
+* **Statistics calculation** - Aggregate statistics over time
+* **Reporting** - Generate reports on update patterns
+
+== Components
+
+=== HistoryStore
+
+Persistent storage for update history:
+
+[source,python]
+----
+from stats.history import HistoryStore
+
+store = HistoryStore()
+store.save_run(run_result)
+
+# Query history
+recent = store.get_recent_runs(limit=10)
+by_plugin = store.get_runs_by_plugin("apt")
+----
+
+=== StatsCalculator
+
+Calculate statistics from history:
+
+[source,python]
+----
+from stats.calculator import StatsCalculator
+
+calc = StatsCalculator(history_store)
+stats = calc.calculate_stats(days=30)
+
+print(f"Total runs: {stats.total_runs}")
+print(f"Success rate: {stats.success_rate:.1%}")
+print(f"Avg duration: {stats.avg_duration:.1f}s")
+----
+
+=== Reporter
+
+Generate reports:
+
+[source,python]
+----
+from stats.reporter import Reporter
+
+reporter = Reporter(history_store)
+report = reporter.generate_weekly_report()
+----
+
+== Storage
+
+History is stored in JSON format at:
+
+* Linux: `~/.local/share/update-all/history.json`
+* macOS: `~/Library/Application Support/update-all/history.json`
+
+== Development
+
+[source,bash]
+----
+# Install dependencies
+just install
+
+# Run tests
+just test
+
+# Run linting
+just lint
+----
+
+== License
+
+MIT License

@@ -1,19 +1,125 @@
 = Update-All UI
 :toc:
 :toc-placement: preamble
+:icons: font
 
 Rich terminal UI components for the update-all system.
 
 == Overview
 
-This package provides terminal UI components using the Rich library:
+This package provides terminal UI components using the Rich library and Textual framework:
 
 * **Progress display** - Real-time progress bars and status updates
 * **Tables** - Formatted output for plugin status and results
 * **Panels** - Information panels and summaries
 * **Live updates** - Streaming output during updates
+* **Interactive Tabs** - PTY-based terminal emulation with full interactivity
 
 == Components
+
+=== Interactive Tabbed UI (Recommended)
+
+The interactive tabbed UI provides full terminal emulation with PTY support, allowing for:
+
+* Live output display with ANSI escape sequence support
+* Interactive input (sudo prompts, confirmations, etc.)
+* Independent scrollback buffer per tab
+* Configurable keyboard shortcuts
+
+[source,python]
+----
+from ui.interactive_tabbed_run import run_with_interactive_tabbed_ui
+from ui.key_bindings import KeyBindings
+
+# Run plugins with interactive UI
+await run_with_interactive_tabbed_ui(
+    plugins=[apt_plugin, flatpak_plugin],
+    configs=plugin_configs,
+    dry_run=False,
+)
+
+# With custom key bindings
+custom_bindings = KeyBindings({
+    "next_tab": "alt+n",
+    "prev_tab": "alt+p",
+})
+await run_with_interactive_tabbed_ui(
+    plugins=[apt_plugin],
+    key_bindings=custom_bindings,
+)
+----
+
+==== Keyboard Shortcuts
+
+[cols="2,3"]
+|===
+| Shortcut | Action
+
+| `Ctrl+Tab`
+| Switch to next tab
+
+| `Ctrl+Shift+Tab`
+| Switch to previous tab
+
+| `Alt+1` to `Alt+9`
+| Switch to tab N
+
+| `Ctrl+Q`
+| Quit application
+
+| `Shift+PageUp`
+| Scroll up in history
+
+| `Shift+PageDown`
+| Scroll down in history
+
+| `Shift+Home`
+| Scroll to top of history
+
+| `Shift+End`
+| Scroll to bottom (current output)
+
+| `F1`
+| Show help
+|===
+
+==== Custom Key Bindings
+
+[source,python]
+----
+from ui.key_bindings import KeyBindings
+
+# Create custom bindings
+bindings = KeyBindings({
+    "next_tab": "alt+right",
+    "prev_tab": "alt+left",
+    "quit": "ctrl+x",
+    "scroll_up": "ctrl+up",
+    "scroll_down": "ctrl+down",
+})
+
+# Available actions:
+# - next_tab, prev_tab
+# - tab_1 through tab_9
+# - quit, help
+# - scroll_up, scroll_down, scroll_top, scroll_bottom
+----
+
+=== Streaming Tabbed UI (Legacy)
+
+The streaming tabbed UI provides non-interactive output display:
+
+[source,python]
+----
+from ui.tabbed_run import run_with_tabbed_ui
+
+await run_with_tabbed_ui(
+    plugins=[apt_plugin, flatpak_plugin],
+    configs=plugin_configs,
+    dry_run=False,
+    use_streaming=True,
+)
+----
 
 === ProgressDisplay
 
@@ -54,6 +160,71 @@ panel = SummaryPanel(results)
 panel.render()
 ----
 
+== Architecture
+
+=== Interactive Tabs Architecture
+
+The interactive tabs feature is built on several components:
+
+[source]
+----
+┌─────────────────────────────────────────────────────────────────┐
+│                    InteractiveTabbedApp                          │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                    TabbedContent                         │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │    │
+│  │  │ TerminalPane│  │ TerminalPane│  │ TerminalPane│      │    │
+│  │  │   (apt)     │  │  (flatpak)  │  │   (pipx)    │      │    │
+│  │  │             │  │             │  │             │      │    │
+│  │  │TerminalView │  │TerminalView │  │TerminalView │      │    │
+│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘      │    │
+│  └─────────┼────────────────┼────────────────┼─────────────┘    │
+│            │                │                │                   │
+│            ▼                ▼                ▼                   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                   PTYSessionManager                      │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │    │
+│  │  │ PTYSession  │  │ PTYSession  │  │ PTYSession  │      │    │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘      │    │
+│  └─────────────────────────────────────────────────────────┘    │
+├─────────────────────────────────────────────────────────────────┤
+│                        InputRouter                               │
+│  - Navigation keys → App (tab switching)                         │
+│  - Other keys → Active PTY                                       │
+└─────────────────────────────────────────────────────────────────┘
+----
+
+==== Components
+
+* **InteractiveTabbedApp** - Main Textual application
+* **TerminalPane** - Container combining TerminalView with status bar
+* **TerminalView** - Textual widget rendering terminal screen
+* **TerminalScreen** - Pyte-based terminal emulator
+* **PTYSession** - PTY subprocess wrapper
+* **PTYSessionManager** - Manages multiple PTY sessions
+* **InputRouter** - Routes keyboard input to appropriate destination
+* **KeyBindings** - Configurable key binding system
+
+=== Plugin Interface
+
+Plugins can support interactive mode by implementing:
+
+[source,python]
+----
+class MyPlugin(UpdatePlugin):
+    @property
+    def supports_interactive(self) -> bool:
+        """Return True to enable interactive mode."""
+        return True
+
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Return command to run in PTY."""
+        if dry_run:
+            return ["/usr/bin/apt", "update", "--dry-run"]
+        return ["/usr/bin/apt", "update"]
+----
+
 == Development
 
 [source,bash]
@@ -66,8 +237,124 @@ just test
 
 # Run linting
 just lint
+
+# Run specific test file
+just test tests/test_interactive_tabbed_run.py
+
+# Run performance benchmarks
+just test tests/test_performance_benchmarks.py
 ----
+
+=== Test Categories
+
+* **Unit tests** - Test individual components in isolation
+* **Integration tests** - Test component interactions
+* **E2E tests** - Test complete user workflows (`test_e2e_interactive_tabs.py`)
+* **Performance benchmarks** - Measure performance characteristics (`test_performance_benchmarks.py`)
+
+=== Performance Targets
+
+[cols="3,2,2"]
+|===
+| Operation | Target | Measured
+
+| Plain text processing (10K chars)
+| < 100ms
+| ~50ms
+
+| ANSI sequence processing (1K sequences)
+| < 100ms
+| ~30ms
+
+| Scrollback append (10K lines)
+| < 100ms
+| ~80ms
+
+| Key routing (1K keys)
+| < 50ms
+| ~10ms
+
+| PTY creation
+| < 100ms
+| ~50ms
+
+| Input-output latency
+| < 50ms
+| ~10ms
+|===
+
+== Configuration
+
+=== Key Bindings Configuration
+
+Key bindings can be configured via TOML file at `~/.config/update-all/keybindings.toml`:
+
+[source,toml]
+----
+[tab_navigation]
+next_tab = "ctrl+tab"
+prev_tab = "ctrl+shift+tab"
+tab_1 = "alt+1"
+tab_2 = "alt+2"
+# ... up to tab_9
+
+[terminal]
+scroll_up = "shift+pageup"
+scroll_down = "shift+pagedown"
+scroll_top = "shift+home"
+scroll_bottom = "shift+end"
+
+[app]
+quit = "ctrl+q"
+help = "f1"
+----
+
+=== Terminal Configuration
+
+Terminal pane configuration:
+
+[source,python]
+----
+from ui.terminal_pane import PaneConfig
+
+config = PaneConfig(
+    columns=80,           # Terminal width
+    lines=24,             # Terminal height
+    scrollback_lines=10000,  # Scrollback buffer size
+    show_status_bar=True,    # Show status bar
+    show_scrollbar=True,     # Show scrollbar
+    env={"TERM": "xterm-256color"},  # Environment variables
+    cwd="/home/user",     # Working directory
+)
+----
+
+== Platform Support
+
+=== Linux
+
+Full support for all features including PTY-based interactive mode.
+
+=== macOS
+
+Full support for all features including PTY-based interactive mode.
+
+=== Windows
+
+PTY is not available on Windows. The system automatically falls back to the streaming tabbed UI (non-interactive mode).
+
+== Dependencies
+
+* `rich` >= 14.0 - Rich text formatting
+* `textual` >= 7.0.0, < 8.0.0 - TUI framework
+* `pyte` >= 0.8.2 - Terminal emulator
+* `ptyprocess` >= 0.7.0 - PTY subprocess management
 
 == License
 
 MIT License
+
+== See Also
+
+* link:../docs/interactive-tabs-implementation-plan.md[Interactive Tabs Implementation Plan]
+* link:../docs/interactive-tabs-architecture-evaluation.md[Architecture Evaluation]
+* link:../docs/interactive-tabs-risk-analysis.md[Risk Analysis]

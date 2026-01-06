@@ -3,9 +3,11 @@
 from datetime import datetime
 
 from core.models import (
+    DownloadEstimate,
     ExecutionResult,
     GlobalConfig,
     LogLevel,
+    PackageDownload,
     PluginConfig,
     PluginMetadata,
     PluginStatus,
@@ -127,3 +129,93 @@ class TestPluginStatus:
         assert PluginStatus.FAILED == "failed"
         assert PluginStatus.SKIPPED == "skipped"
         assert PluginStatus.TIMEOUT == "timeout"
+
+
+# =============================================================================
+# Download API Models Tests (Phase 2)
+# =============================================================================
+
+
+class TestPackageDownload:
+    """Tests for PackageDownload model."""
+
+    def test_default_values(self) -> None:
+        """Test default values are set correctly."""
+        pkg = PackageDownload(name="python3.12")
+
+        assert pkg.name == "python3.12"
+        assert pkg.version == ""
+        assert pkg.size_bytes is None
+        assert pkg.url is None
+
+    def test_full_values(self) -> None:
+        """Test all values can be set."""
+        pkg = PackageDownload(
+            name="python3.12",
+            version="3.12.2",
+            size_bytes=15_000_000,
+            url="https://archive.ubuntu.com/pool/main/p/python3.12/python3.12_3.12.2.deb",
+        )
+
+        assert pkg.name == "python3.12"
+        assert pkg.version == "3.12.2"
+        assert pkg.size_bytes == 15_000_000
+        assert pkg.url == "https://archive.ubuntu.com/pool/main/p/python3.12/python3.12_3.12.2.deb"
+
+
+class TestDownloadEstimate:
+    """Tests for DownloadEstimate model."""
+
+    def test_default_values(self) -> None:
+        """Test default values are set correctly."""
+        estimate = DownloadEstimate()
+
+        assert estimate.total_bytes is None
+        assert estimate.package_count is None
+        assert estimate.estimated_seconds is None
+        assert estimate.packages == []
+
+    def test_full_values(self) -> None:
+        """Test all values can be set."""
+        packages = [
+            PackageDownload(name="pkg1", version="1.0", size_bytes=10_000_000),
+            PackageDownload(name="pkg2", version="2.0", size_bytes=20_000_000),
+            PackageDownload(name="pkg3", version="3.0", size_bytes=30_000_000),
+        ]
+
+        estimate = DownloadEstimate(
+            total_bytes=60_000_000,
+            package_count=3,
+            estimated_seconds=30.5,
+            packages=packages,
+        )
+
+        assert estimate.total_bytes == 60_000_000
+        assert estimate.package_count == 3
+        assert estimate.estimated_seconds == 30.5
+        assert len(estimate.packages) == 3
+        assert estimate.packages[0].name == "pkg1"
+
+    def test_total_size_mb_property(self) -> None:
+        """Test total_size_mb computed property."""
+        # With bytes set
+        estimate = DownloadEstimate(total_bytes=104_857_600)  # 100 MB
+        assert estimate.total_size_mb == 100.0
+
+        # With None
+        estimate_none = DownloadEstimate()
+        assert estimate_none.total_size_mb is None
+
+    def test_has_size_info_property(self) -> None:
+        """Test has_size_info computed property."""
+        # With bytes set
+        estimate = DownloadEstimate(total_bytes=1000)
+        assert estimate.has_size_info is True
+
+        # With zero bytes
+        estimate_zero = DownloadEstimate(total_bytes=0)
+        assert estimate_zero.has_size_info is False
+
+        # With None
+        estimate_none = DownloadEstimate()
+        assert estimate_none.has_size_info is False

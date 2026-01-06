@@ -159,3 +159,63 @@ class RunResult(BaseModel):
     def failure_count(self) -> int:
         """Number of failed plugin runs."""
         return sum(1 for r in self.plugin_results if r.status == PluginStatus.FAILED)
+
+
+# =============================================================================
+# Download API Models (Phase 2 - Download API)
+# =============================================================================
+
+
+class PackageDownload(BaseModel):
+    """Download information for a single package.
+
+    Used to provide detailed information about individual packages
+    that need to be downloaded during the download phase.
+
+    Attributes:
+        name: Package name/identifier.
+        version: Version to download.
+        size_bytes: Download size in bytes (None if unknown).
+        url: Download URL for logging/debugging (optional).
+    """
+
+    name: str = Field(..., description="Package name")
+    version: str = Field(default="", description="Version to download")
+    size_bytes: int | None = Field(default=None, description="Download size in bytes")
+    url: str | None = Field(default=None, description="Download URL (for logging/debugging)")
+
+
+class DownloadEstimate(BaseModel):
+    """Estimate for download phase.
+
+    Provides information about the expected download size, package count,
+    and estimated time before the download begins. This allows the UI to
+    show progress information and estimated completion time.
+
+    Attributes:
+        total_bytes: Total bytes to download (None if unknown).
+        package_count: Number of packages to download.
+        estimated_seconds: Estimated download time in seconds.
+        packages: Detailed information for each package to download.
+    """
+
+    total_bytes: int | None = Field(default=None, description="Total bytes to download")
+    package_count: int | None = Field(default=None, description="Number of packages to download")
+    estimated_seconds: float | None = Field(
+        default=None, description="Estimated download time in seconds"
+    )
+    packages: list[PackageDownload] = Field(
+        default_factory=list, description="Details for each package to download"
+    )
+
+    @property
+    def total_size_mb(self) -> float | None:
+        """Total download size in megabytes."""
+        if self.total_bytes is None:
+            return None
+        return self.total_bytes / (1024 * 1024)
+
+    @property
+    def has_size_info(self) -> bool:
+        """Check if size information is available."""
+        return self.total_bytes is not None and self.total_bytes > 0

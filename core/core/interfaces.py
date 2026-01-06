@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
-from .models import ExecutionResult, PluginMetadata, PluginStatus
+from .models import DownloadEstimate, ExecutionResult, PluginMetadata, PluginStatus
 from .streaming import (
     CompletionEvent,
     EventType,
@@ -218,6 +218,152 @@ class UpdatePlugin(ABC):
                 success=False,
                 error_message=str(e),
             )
+
+    # =========================================================================
+    # Download API (Phase 2 - Download API)
+    # =========================================================================
+
+    @property
+    def supports_download(self) -> bool:
+        """Check if this plugin supports separate download phase.
+
+        Plugins that can download updates separately from applying them
+        should override this property to return True. This enables:
+        - Pre-downloading updates for offline installation
+        - Download progress tracking
+        - Separate download and execute phases in the UI
+
+        Returns:
+            True if download() can be called separately from execute().
+        """
+        return False
+
+    async def estimate_download(self) -> DownloadEstimate | None:
+        """Estimate the download size and time.
+
+        This method provides information about expected downloads before
+        they begin. Override this method to provide accurate estimates.
+
+        Returns:
+            DownloadEstimate with size and time estimates, or None if
+            no downloads are needed or estimation is not supported.
+        """
+        return None
+
+    async def download(self) -> AsyncIterator[StreamEvent]:
+        """Download updates without applying them.
+
+        This method downloads updates but does not install them. It should
+        only be called if supports_download is True.
+
+        Override this method to implement download-only functionality.
+        The default implementation raises NotImplementedError.
+
+        Yields:
+            StreamEvent objects with download progress.
+            Should emit PhaseEvent for PHASE_START and PHASE_END.
+            Should emit ProgressEvent for download progress.
+            Final event should be CompletionEvent.
+
+        Raises:
+            NotImplementedError: If the plugin does not support separate download.
+        """
+        raise NotImplementedError("Plugin does not support separate download")
+        # Make this a generator (required for AsyncIterator return type)
+        yield  # type: ignore[misc]  # pragma: no cover
+
+    async def download_streaming(self) -> AsyncIterator[StreamEvent]:
+        """Download updates with streaming progress output.
+
+        This is the streaming version of download() that provides
+        real-time progress updates during the download phase.
+
+        Default implementation wraps download() for backward compatibility.
+
+        Yields:
+            StreamEvent objects with download progress.
+        """
+        # Emit phase start
+        yield PhaseEvent(
+            event_type=EventType.PHASE_START,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.DOWNLOAD,
+        )
+
+        try:
+            async for event in self.download():
+                yield event
+
+            # Emit phase end with success
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.DOWNLOAD,
+                success=True,
+            )
+
+        except NotImplementedError:
+            # Plugin doesn't support download
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line="Download not supported - skipping download phase",
+                stream="stderr",
+            )
+
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.DOWNLOAD,
+                success=False,
+                error_message="Plugin does not support separate download",
+            )
+
+        except Exception as e:
+            # Emit phase end with failure
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.DOWNLOAD,
+                success=False,
+                error_message=str(e),
+            )
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message=str(e),
+            )
+
+    async def execute_after_download(
+        self,
+        dry_run: bool = False,
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute updates after download phase.
+
+        This method applies updates that were previously downloaded.
+        It assumes download() was already called successfully.
+
+        Override this method to implement post-download execution.
+        The default implementation delegates to execute_streaming().
+
+        Args:
+            dry_run: If True, simulate the update without making changes.
+
+        Yields:
+            StreamEvent objects as the plugin executes.
+        """
+        # Default: same as execute_streaming
+        async for event in self.execute_streaming(dry_run=dry_run):
+            yield event
 
 
 class PluginExecutor(ABC):

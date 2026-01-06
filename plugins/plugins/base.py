@@ -13,13 +13,21 @@ from typing import TYPE_CHECKING
 import structlog
 
 from core.interfaces import UpdatePlugin
-from core.models import ExecutionResult, PluginConfig, PluginResult, PluginStatus, UpdateStatus
+from core.models import (
+    DownloadEstimate,
+    ExecutionResult,
+    PluginConfig,
+    PluginResult,
+    PluginStatus,
+    UpdateStatus,
+)
 from core.streaming import (
     CompletionEvent,
     EventType,
     OutputEvent,
     Phase,
     PhaseEvent,
+    ProgressEvent,
     StreamEvent,
     StreamEventQueue,
     parse_progress_line,
@@ -625,6 +633,224 @@ class BasePlugin(UpdatePlugin):
             packages_updated=self._count_updated_packages(output) if output else 0,
             error_message=error,
         )
+
+    # =========================================================================
+    # Download API (Phase 2 - Download API)
+    # =========================================================================
+
+    @property
+    def supports_download(self) -> bool:
+        """Check if this plugin supports separate download phase.
+
+        Override in subclasses that support downloading updates separately
+        from applying them. This enables:
+        - Pre-downloading updates for offline installation
+        - Download progress tracking
+        - Separate download and execute phases in the UI
+
+        Returns:
+            False by default. Override to return True if supported.
+        """
+        return False
+
+    async def estimate_download(self) -> DownloadEstimate | None:
+        """Estimate the download size and time.
+
+        Override this method to provide accurate download estimates.
+        The default implementation returns None (no estimate available).
+
+        Returns:
+            DownloadEstimate with size and time estimates, or None if
+            no downloads are needed or estimation is not supported.
+        """
+        return None
+
+    async def download(self) -> AsyncIterator[StreamEvent]:
+        """Download updates without applying them.
+
+        This method downloads updates but does not install them. Override
+        this method to implement download-only functionality.
+
+        The default implementation raises NotImplementedError.
+
+        Yields:
+            StreamEvent objects with download progress.
+
+        Raises:
+            NotImplementedError: If the plugin does not support separate download.
+        """
+        raise NotImplementedError(f"Plugin '{self.name}' does not support separate download")
+        # Make this a generator (required for AsyncIterator return type)
+        yield  # type: ignore[misc]  # pragma: no cover
+
+    async def download_streaming(self) -> AsyncIterator[StreamEvent]:
+        """Download updates with streaming progress output.
+
+        This is the streaming version of download() that provides
+        real-time progress updates during the download phase.
+
+        Yields:
+            StreamEvent objects with download progress.
+        """
+        log = logger.bind(plugin=self.name)
+
+        # Check if download is supported
+        if not self.supports_download:
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=f"Plugin '{self.name}' does not support separate download",
+                stream="stderr",
+            )
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message="Plugin does not support separate download",
+            )
+            return
+
+        # Emit phase start
+        yield PhaseEvent(
+            event_type=EventType.PHASE_START,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.DOWNLOAD,
+        )
+
+        log.info("starting_download")
+
+        try:
+            final_success = False
+            final_error: str | None = None
+
+            async for event in self.download():
+                yield event
+
+                # Track completion status
+                if isinstance(event, CompletionEvent):
+                    final_success = event.success
+                    final_error = event.error_message
+
+            # Emit phase end
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.DOWNLOAD,
+                success=final_success,
+                error_message=final_error,
+            )
+
+            log.info("download_completed", success=final_success)
+
+        except NotImplementedError as e:
+            log.warning("download_not_supported", error=str(e))
+
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.DOWNLOAD,
+                success=False,
+                error_message=str(e),
+            )
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message=str(e),
+            )
+
+        except Exception as e:
+            log.exception("download_error", error=str(e))
+
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.DOWNLOAD,
+                success=False,
+                error_message=str(e),
+            )
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message=str(e),
+            )
+
+    async def execute_after_download(
+        self,
+        dry_run: bool = False,
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute updates after download phase.
+
+        This method applies updates that were previously downloaded.
+        It assumes download() was already called successfully.
+
+        Override this method to implement post-download execution.
+        The default implementation delegates to execute_streaming().
+
+        Args:
+            dry_run: If True, simulate the update without making changes.
+
+        Yields:
+            StreamEvent objects as the plugin executes.
+        """
+        # Default: same as execute_streaming
+        async for event in self.execute_streaming(dry_run=dry_run):
+            yield event
+
+    async def _run_download_command_streaming(
+        self,
+        cmd: list[str],
+        timeout: int,
+        *,
+        sudo: bool = False,
+    ) -> AsyncIterator[StreamEvent]:
+        """Run a download command with streaming output and progress tracking.
+
+        This is a specialized version of _run_command_streaming for download
+        operations. It parses progress events and emits them with the DOWNLOAD phase.
+
+        Args:
+            cmd: Command and arguments as a list.
+            timeout: Timeout in seconds.
+            sudo: Whether to prepend sudo to the command.
+
+        Yields:
+            StreamEvent objects as output is produced.
+        """
+        async for event in self._run_command_streaming(
+            cmd, timeout, sudo=sudo, phase=Phase.DOWNLOAD
+        ):
+            # Re-tag progress events with DOWNLOAD phase
+            if isinstance(event, ProgressEvent):
+                yield ProgressEvent(
+                    event_type=EventType.PROGRESS,
+                    plugin_name=self.name,
+                    timestamp=event.timestamp,
+                    phase=Phase.DOWNLOAD,
+                    percent=event.percent,
+                    message=event.message,
+                    bytes_downloaded=event.bytes_downloaded,
+                    bytes_total=event.bytes_total,
+                    items_completed=event.items_completed,
+                    items_total=event.items_total,
+                )
+            else:
+                yield event
 
     # =========================================================================
     # Self-Update Mechanism (Phase 3)

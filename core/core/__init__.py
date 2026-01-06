@@ -6,10 +6,12 @@ Core library providing models, interfaces, and utilities for the update-all syst
 from core.config import ConfigManager, YamlConfigLoader, get_config_dir, get_default_config_path
 from core.interfaces import ConfigLoader, PluginExecutor, UpdatePlugin
 from core.models import (
+    DownloadEstimate,
     ExecutionResult,
     ExecutionSummary,
     GlobalConfig,
     LogLevel,
+    PackageDownload,
     PluginConfig,
     PluginMetadata,
     PluginResult,
@@ -82,7 +84,7 @@ from core.streaming import (
 )
 from core.streaming import ProgressEvent as StreamProgressEvent
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "CompletionEvent",
@@ -90,6 +92,7 @@ __all__ = [
     "ConfigManager",
     "ConnectionError",
     "DeadlockError",
+    "DownloadEstimate",
     "EventType",
     "ExecutionDAG",
     "ExecutionResult",
@@ -106,6 +109,7 @@ __all__ = [
     "NotificationUrgency",
     "Orchestrator",
     "OutputEvent",
+    "PackageDownload",
     "ParallelOrchestrator",
     "Phase",
     "PhaseEvent",

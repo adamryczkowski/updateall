@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from core.streaming import (
+    CompletionEvent,
+    EventType,
+    OutputEvent,
+    Phase,
+    StreamEvent,
+)
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from core.models import PluginConfig
 
 
@@ -79,3 +89,57 @@ class PipxPlugin(BasePlugin):
             upgraded_count = len(re.findall(r"Package\s+'\S+'\s+upgraded", output, re.IGNORECASE))
 
         return upgraded_count
+
+    async def _execute_update_streaming(self) -> AsyncIterator[StreamEvent]:
+        """Execute pipx upgrade-all with streaming output.
+
+        This method provides real-time output during pipx operations.
+
+        Yields:
+            StreamEvent objects as pipx executes.
+        """
+        from core.models import PluginConfig
+
+        config = PluginConfig(name=self.name)
+        collected_output: list[str] = []
+
+        yield OutputEvent(
+            event_type=EventType.OUTPUT,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            line="=== pipx upgrade-all ===",
+            stream="stdout",
+        )
+
+        async for event in self._run_command_streaming(
+            ["pipx", "upgrade-all"],
+            timeout=config.timeout_seconds,
+            sudo=False,
+            phase=Phase.EXECUTE,
+        ):
+            # Collect output for package counting
+            if isinstance(event, OutputEvent):
+                collected_output.append(event.line)
+
+            # Check for completion event
+            if isinstance(event, CompletionEvent):
+                # pipx returns non-zero if nothing to upgrade
+                success = event.success
+                if not success:
+                    output_str = "\n".join(collected_output)
+                    if "No packages to upgrade" in output_str or "already at latest" in output_str:
+                        success = True
+
+                packages_updated = self._count_updated_packages("\n".join(collected_output))
+                yield CompletionEvent(
+                    event_type=EventType.COMPLETION,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    success=success,
+                    exit_code=0 if success else event.exit_code,
+                    packages_updated=packages_updated,
+                    error_message=None if success else event.error_message,
+                )
+                return
+
+            yield event

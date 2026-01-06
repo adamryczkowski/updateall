@@ -30,31 +30,41 @@ Update-All is a command-line tool that orchestrates updates across multiple pack
 
 ## Installation
 
-### Prerequisites
+### Install with pipx (Recommended)
 
+The easiest way to install Update-All is using [pipx](https://pipx.pypa.io/):
+
+```bash
+# Install pipx if you don't have it
+sudo apt install pipx
+pipx ensurepath
+
+# Install update-all
+pipx install git+https://github.com/adamryczkowski/updateall.git#subdirectory=cli
+
+# Verify installation
+update-all --version
+```
+
+### Install from Source (Development)
+
+For development or if you want to modify the code:
+
+**Prerequisites:**
 - Python 3.11 or later
 - [Poetry](https://python-poetry.org/) 2.0 or later
 - [just](https://github.com/casey/just) command runner
 
-### Install from Source
-
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/update-all.git
-cd update-all
+git clone https://github.com/adamryczkowski/updateall.git
+cd updateall
 
 # Install all components
 just install-all
 
 # Verify installation
 just run -- --version
-```
-
-### Quick Install (Development)
-
-```bash
-# Install dependencies for all subprojects
-just install-all
 
 # Run update-all
 just run

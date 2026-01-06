@@ -85,6 +85,29 @@ class BasePlugin(UpdatePlugin):
         """Return a human-readable description of the plugin."""
         return f"Update plugin for {self.name}"
 
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Get the shell command to run for interactive mode.
+
+        This method returns the command that will be executed in a PTY
+        for interactive terminal display. Override in subclasses to
+        provide the actual update command.
+
+        The command should be a single command that performs the full
+        update process. For plugins that require multiple commands
+        (e.g., apt update && apt upgrade), use a shell wrapper.
+
+        Args:
+            dry_run: If True, return a command that simulates the update.
+
+        Returns:
+            Command and arguments as a list.
+        """
+        # Default implementation: run the command with common update flags
+        # Subclasses should override for plugin-specific behavior
+        if dry_run:
+            return ["/bin/bash", "-c", f"echo '[{self.name}] Dry run - no changes made'"]
+        return ["/bin/bash", "-c", f"echo '[{self.name}] No interactive command defined'"]
+
     async def check_available(self) -> bool:
         """Check if the plugin's command is available on the system."""
         return shutil.which(self.command) is not None
@@ -681,7 +704,7 @@ class BasePlugin(UpdatePlugin):
         """
         raise NotImplementedError(f"Plugin '{self.name}' does not support separate download")
         # Make this a generator (required for AsyncIterator return type)
-        yield  # type: ignore[misc]  # pragma: no cover
+        yield  # pragma: no cover
 
     async def download_streaming(self) -> AsyncIterator[StreamEvent]:
         """Download updates with streaming progress output.

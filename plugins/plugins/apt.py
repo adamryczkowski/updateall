@@ -44,6 +44,30 @@ class AptPlugin(BasePlugin):
         """Return plugin description."""
         return "Debian/Ubuntu APT package manager"
 
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Get the shell command to run for interactive mode.
+
+        Returns a bash command that runs apt update followed by apt upgrade,
+        showing live output in the terminal.
+
+        Args:
+            dry_run: If True, return a command that simulates the update.
+
+        Returns:
+            Command and arguments as a list.
+        """
+        if dry_run:
+            return [
+                "/bin/bash",
+                "-c",
+                "sudo apt update && sudo apt upgrade --dry-run",
+            ]
+        return [
+            "/bin/bash",
+            "-c",
+            "sudo apt update && sudo apt upgrade -y",
+        ]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
         """Execute apt update and upgrade.
 

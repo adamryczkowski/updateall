@@ -43,6 +43,23 @@ class PipxPlugin(BasePlugin):
         """Return plugin description."""
         return "Python application installer (pipx)"
 
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Get the shell command to run for interactive mode.
+
+        Returns a command that runs pipx upgrade-all, showing live output
+        in the terminal.
+
+        Args:
+            dry_run: If True, return a command that simulates the update.
+
+        Returns:
+            Command and arguments as a list.
+        """
+        if dry_run:
+            # pipx doesn't have a native dry-run, so just list packages
+            return ["pipx", "list"]
+        return ["pipx", "upgrade-all"]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
         """Execute pipx upgrade-all.
 

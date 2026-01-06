@@ -9,6 +9,8 @@ This guide explains how to create plugins for Update-All. Plugins extend Update-
 - [Plugin Architecture](#plugin-architecture)
 - [API Reference](#api-reference)
 - [Advanced Topics](#advanced-topics)
+- [Streaming Output](#streaming-output)
+- [External Plugins](#external-plugins)
 - [Testing Plugins](#testing-plugins)
 - [Publishing Plugins](#publishing-plugins)
 
@@ -572,6 +574,290 @@ def metadata(self) -> PluginMetadata:
         dependencies=["apt"],  # Run after apt completes
     )
 ```
+
+## Streaming Output
+
+Update-All supports real-time streaming output from plugins, enabling live progress display in the UI. This section covers how to implement streaming in your plugins.
+
+### Why Streaming?
+
+Without streaming, plugin output is only displayed after execution completes. With streaming:
+- Users see output in real-time as commands run
+- Progress bars show download and installation progress
+- Errors are visible immediately, not after minutes of waiting
+- The UI feels responsive even for long-running updates
+
+### Streaming Interface
+
+Python plugins can implement streaming by overriding `execute_streaming()`:
+
+```python
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+
+from core.streaming import (
+    CompletionEvent,
+    EventType,
+    OutputEvent,
+    Phase,
+    PhaseEvent,
+    ProgressEvent,
+    StreamEvent,
+)
+
+
+class MyStreamingPlugin(BasePlugin):
+    @property
+    def supports_streaming(self) -> bool:
+        """Indicate that this plugin supports streaming."""
+        return True
+
+    async def execute_streaming(
+        self,
+        dry_run: bool = False,
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute with streaming output."""
+        # Emit phase start
+        yield PhaseEvent(
+            event_type=EventType.PHASE_START,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.EXECUTE,
+        )
+
+        # Run commands with streaming
+        async for event in self._run_command_streaming(
+            ["mypkg", "upgrade"],
+            timeout=300,
+        ):
+            yield event
+
+        # Emit phase end
+        yield PhaseEvent(
+            event_type=EventType.PHASE_END,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.EXECUTE,
+            success=True,
+        )
+```
+
+### Event Types
+
+The streaming system uses several event types:
+
+| Event Type | Purpose |
+|------------|---------|
+| `OutputEvent` | Raw output line (stdout/stderr) |
+| `ProgressEvent` | Progress update with percentage |
+| `PhaseEvent` | Phase start/end markers |
+| `CompletionEvent` | Final completion status |
+
+### Progress Events
+
+Report progress during execution:
+
+```python
+yield ProgressEvent(
+    event_type=EventType.PROGRESS,
+    plugin_name=self.name,
+    timestamp=datetime.now(tz=UTC),
+    phase=Phase.EXECUTE,
+    percent=50.0,
+    message="Installing package 5/10...",
+    items_completed=5,
+    items_total=10,
+)
+```
+
+For downloads, include byte counts:
+
+```python
+yield ProgressEvent(
+    event_type=EventType.PROGRESS,
+    plugin_name=self.name,
+    timestamp=datetime.now(tz=UTC),
+    phase=Phase.DOWNLOAD,
+    percent=45.5,
+    message="Downloading python3.12...",
+    bytes_downloaded=15_000_000,
+    bytes_total=33_000_000,
+)
+```
+
+### Download Phase Support
+
+Plugins can support separate download and execute phases:
+
+```python
+class MyPlugin(BasePlugin):
+    @property
+    def supports_download(self) -> bool:
+        """Enable separate download phase."""
+        return True
+
+    async def download(self) -> AsyncIterator[StreamEvent]:
+        """Download updates without installing."""
+        yield PhaseEvent(
+            event_type=EventType.PHASE_START,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.DOWNLOAD,
+        )
+
+        # Download logic here...
+        async for event in self._run_download_command_streaming(
+            ["mypkg", "download", "--only"],
+            timeout=3600,
+        ):
+            yield event
+
+        yield PhaseEvent(
+            event_type=EventType.PHASE_END,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.DOWNLOAD,
+            success=True,
+        )
+
+    async def estimate_download(self) -> DownloadEstimate | None:
+        """Estimate download size before starting."""
+        return DownloadEstimate(
+            total_bytes=100_000_000,
+            package_count=5,
+            estimated_seconds=60,
+        )
+```
+
+### Using `_run_command_streaming()`
+
+The `BasePlugin` class provides a streaming command executor:
+
+```python
+async for event in self._run_command_streaming(
+    ["mypkg", "upgrade", "-y"],
+    timeout=300,
+    sudo=True,
+    phase=Phase.EXECUTE,
+):
+    yield event
+```
+
+This method:
+- Reads stdout and stderr line-by-line
+- Parses JSON progress events from stderr (with `PROGRESS:` prefix)
+- Handles timeouts gracefully
+- Emits a `CompletionEvent` when done
+
+## External Plugins
+
+Update-All supports external executable plugins written in any language (Bash, Python, Go, etc.). External plugins communicate via stdout/stderr using a defined protocol.
+
+### Quick Start
+
+Create an executable script that responds to commands:
+
+```bash
+#!/bin/bash
+# my-plugin.sh
+
+case "$1" in
+    is-applicable)
+        # Check if this plugin can run
+        command -v my-package-manager &> /dev/null
+        exit $?
+        ;;
+    update)
+        echo "Running update..."
+        # Your update logic here
+        exit 0
+        ;;
+    *)
+        echo "Unknown command: $1" >&2
+        exit 1
+        ;;
+esac
+```
+
+### Required Commands
+
+| Command | Description | Exit Code |
+|---------|-------------|-----------|
+| `is-applicable` | Check if plugin can run | 0=yes, 1=no |
+| `update` | Execute updates | 0=success, non-zero=failure |
+
+### Optional Commands
+
+| Command | Description |
+|---------|-------------|
+| `does-require-sudo` | Check if sudo needed (exit 0=yes, 1=no) |
+| `can-separate-download` | Check if download is separate |
+| `estimate-update` | Return JSON with size/time estimates |
+| `download` | Download updates only |
+
+### Streaming Protocol
+
+External plugins can emit progress events to stderr:
+
+```bash
+# Emit progress event
+echo 'PROGRESS:{"phase":"execute","percent":50,"message":"Installing..."}' >&2
+
+# Regular output goes to stdout
+echo "Installing package..."
+```
+
+The `PROGRESS:` prefix tells Update-All to parse the line as a JSON progress event.
+
+### Progress Event Format
+
+```json
+{
+  "phase": "download|execute|check",
+  "percent": 45.5,
+  "message": "Downloading package...",
+  "bytes_downloaded": 15000000,
+  "bytes_total": 33000000,
+  "items_completed": 3,
+  "items_total": 10
+}
+```
+
+### Phase Events
+
+Signal phase start/end:
+
+```bash
+# Phase start
+echo 'PROGRESS:{"type":"phase_start","phase":"download"}' >&2
+
+# ... do work ...
+
+# Phase end
+echo 'PROGRESS:{"type":"phase_end","phase":"download","success":true}' >&2
+```
+
+### Validating External Plugins
+
+Use the validation tool to check your plugin:
+
+```bash
+# Validate plugin
+update-all plugins validate ./my-plugin.sh
+
+# Verbose output
+update-all plugins validate ./my-plugin.sh --verbose
+```
+
+### Example External Plugins
+
+See the `examples/plugins/` directory for complete examples:
+- `example-bash-plugin.sh` — Full-featured Bash plugin
+- `example-python-plugin.py` — Full-featured Python plugin
+
+### Full Protocol Documentation
+
+For complete protocol details, see [External Plugin Streaming Protocol](external-plugin-streaming-protocol.md).
 
 ## Testing Plugins
 

@@ -6,6 +6,7 @@ This module defines the Typer application and main commands.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
@@ -15,8 +16,6 @@ from rich.table import Table
 from . import __version__
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from plugins import PluginRegistry
 
     from core import ConfigManager
@@ -504,6 +503,50 @@ def plugins_disable(
 
     config_manager.save(config)
     console.print(f"[yellow]Disabled plugin: {name}[/yellow]")
+
+
+@plugins_app.command("validate")
+def plugins_validate(
+    plugin_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to the plugin executable to validate.",
+        ),
+    ],
+    timeout: Annotated[
+        int,
+        typer.Option(
+            "--timeout",
+            "-t",
+            help="Timeout for each command in seconds.",
+        ),
+    ] = 30,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Enable verbose output.",
+        ),
+    ] = False,
+) -> None:
+    """Validate an external plugin.
+
+    Check that a plugin conforms to the Update-All plugin protocol,
+    including streaming output format and required commands.
+
+    Example:
+        update-all plugins validate /path/to/my-plugin
+        update-all plugins validate ./my-plugin.sh --verbose
+    """
+    from .validate_plugin import print_validation_result, validate_plugin_async
+
+    result = asyncio.run(validate_plugin_async(Path(plugin_path), timeout=timeout, verbose=verbose))
+    print_validation_result(result, verbose=verbose)
+
+    # Exit with appropriate code
+    if result.has_errors:
+        raise typer.Exit(1)
 
 
 # Create config subcommand group

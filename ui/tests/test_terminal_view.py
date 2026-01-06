@@ -284,3 +284,74 @@ class TestTerminalViewProperties:
         assert isinstance(display, list)
         assert len(display) == view.lines
         assert "Test" in display[0]
+
+
+class TestTerminalViewContentSize:
+    """Tests for TerminalView content size methods.
+
+    These methods are required by Textual to properly size the widget
+    and call render_line() for all visible lines.
+    """
+
+    def test_get_content_height_returns_terminal_lines(self) -> None:
+        """Test that get_content_height returns the terminal line count."""
+        from textual.geometry import Size
+
+        view = TerminalView(columns=80, lines=24)
+        container = Size(100, 50)
+        viewport = Size(100, 50)
+
+        height = view.get_content_height(container, viewport, 80)
+        assert height == 24
+
+    def test_get_content_height_with_custom_lines(self) -> None:
+        """Test get_content_height with custom terminal size."""
+        from textual.geometry import Size
+
+        view = TerminalView(columns=120, lines=40)
+        container = Size(200, 100)
+        viewport = Size(200, 100)
+
+        height = view.get_content_height(container, viewport, 120)
+        assert height == 40
+
+    def test_get_content_width_returns_terminal_columns(self) -> None:
+        """Test that get_content_width returns the terminal column count."""
+        from textual.geometry import Size
+
+        view = TerminalView(columns=80, lines=24)
+        container = Size(100, 50)
+        viewport = Size(100, 50)
+
+        width = view.get_content_width(container, viewport)
+        assert width == 80
+
+    def test_get_content_width_with_custom_columns(self) -> None:
+        """Test get_content_width with custom terminal size."""
+        from textual.geometry import Size
+
+        view = TerminalView(columns=120, lines=40)
+        container = Size(200, 100)
+        viewport = Size(200, 100)
+
+        width = view.get_content_width(container, viewport)
+        assert width == 120
+
+    def test_content_size_after_resize(self) -> None:
+        """Test that content size updates after terminal resize."""
+        from textual.geometry import Size
+
+        view = TerminalView(columns=80, lines=24)
+        container = Size(200, 100)
+        viewport = Size(200, 100)
+
+        # Initial size
+        assert view.get_content_width(container, viewport) == 80
+        assert view.get_content_height(container, viewport, 80) == 24
+
+        # Resize terminal
+        view.resize_terminal(columns=120, lines=40)
+
+        # Size should update
+        assert view.get_content_width(container, viewport) == 120
+        assert view.get_content_height(container, viewport, 120) == 40

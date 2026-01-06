@@ -621,3 +621,109 @@ class TestE2EStateTransitions:
 
             # Should be FAILED or still RUNNING (timing dependent)
             assert pane.state in (PaneState.FAILED, PaneState.RUNNING, PaneState.EXITED)
+
+
+class TestE2EPluginOutputVisible:
+    """E2E tests for verifying plugin output is visible in terminal display."""
+
+    @pytest.mark.asyncio
+    async def test_plugin_output_visible_in_terminal_display(self) -> None:
+        """Test that plugin output is visible in the terminal display buffer.
+
+        This test verifies the complete data flow:
+        1. Plugin command runs in PTY
+        2. PTY output is read by _read_loop
+        3. Output is fed to TerminalView
+        4. Output appears in terminal_display buffer
+        """
+        # Use a unique marker to identify our output
+        marker = "VISIBLE_OUTPUT_TEST_12345"
+        plugin = create_mock_plugin(
+            "visible",
+            command=["/bin/bash", "-c", f"echo '{marker}'"],
+        )
+
+        app = InteractiveTabbedApp(
+            plugins=[plugin],
+            auto_start=False,
+        )
+
+        async with app.run_test():
+            pane = app.terminal_panes["visible"]
+            await pane.start()
+
+            # Wait for output to be processed
+            await asyncio.sleep(0.5)
+
+            # Verify terminal view exists
+            assert pane.terminal_view is not None
+
+            # Verify the marker appears in the terminal display
+            display = pane.terminal_view.terminal_display
+            display_text = "\n".join(display)
+            assert marker in display_text, (
+                f"Expected marker '{marker}' not found in terminal display. "
+                f"First 3 lines: {display[:3]}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_multiline_output_visible_in_terminal_display(self) -> None:
+        """Test that multiline output is visible in the terminal display."""
+        plugin = create_mock_plugin(
+            "multiline",
+            command=["/bin/bash", "-c", "echo 'Line1' && echo 'Line2' && echo 'Line3'"],
+        )
+
+        app = InteractiveTabbedApp(
+            plugins=[plugin],
+            auto_start=False,
+        )
+
+        async with app.run_test():
+            pane = app.terminal_panes["multiline"]
+            await pane.start()
+
+            # Wait for output to be processed
+            await asyncio.sleep(0.5)
+
+            # Verify terminal view exists
+            assert pane.terminal_view is not None
+
+            # Verify all lines appear in the terminal display
+            display = pane.terminal_view.terminal_display
+            assert "Line1" in display[0], f"Line1 not in display[0]: {display[0]}"
+            assert "Line2" in display[1], f"Line2 not in display[1]: {display[1]}"
+            assert "Line3" in display[2], f"Line3 not in display[2]: {display[2]}"
+
+    @pytest.mark.asyncio
+    async def test_render_line_returns_content(self) -> None:
+        """Test that render_line returns the terminal content as Strip.
+
+        This verifies that Textual can render the terminal content.
+        """
+        plugin = create_mock_plugin(
+            "render",
+            command=["/bin/bash", "-c", "echo 'RenderTest'"],
+        )
+
+        app = InteractiveTabbedApp(
+            plugins=[plugin],
+            auto_start=False,
+        )
+
+        async with app.run_test():
+            pane = app.terminal_panes["render"]
+            await pane.start()
+
+            # Wait for output to be processed
+            await asyncio.sleep(0.5)
+
+            # Verify terminal view exists
+            assert pane.terminal_view is not None
+
+            # Verify render_line returns content
+            strip = pane.terminal_view.render_line(0)
+            strip_text = "".join(seg.text for seg in strip)
+            assert "RenderTest" in strip_text, (
+                f"Expected 'RenderTest' in rendered strip, got: {strip_text}"
+            )

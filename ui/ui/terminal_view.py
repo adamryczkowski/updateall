@@ -9,12 +9,17 @@ See docs/interactive-tabs-implementation-plan.md section 3.2.1
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from rich.console import Console
 from rich.style import Style
 from rich.text import Text
 from textual.reactive import reactive
 from textual.strip import Strip
 from textual.widget import Widget
+
+if TYPE_CHECKING:
+    from textual.geometry import Size
 
 from ui.terminal_screen import StyledChar, TerminalScreen
 
@@ -317,3 +322,32 @@ class TerminalView(Widget):
         console = self.app.console if self.app else Console()
         segments = list(text.render(console))
         return Strip(segments)
+
+    def get_content_width(self, _container: Size, _viewport: Size) -> int:
+        """Get the width of the terminal content.
+
+        Called by Textual to determine the widget's content width.
+
+        Args:
+            _container: Size of the container (immediate parent) widget.
+            _viewport: Size of the viewport.
+
+        Returns:
+            The terminal width in columns.
+        """
+        return self._terminal_screen.columns
+
+    def get_content_height(self, _container: Size, _viewport: Size, _width: int) -> int:
+        """Get the height of the terminal content.
+
+        Called by Textual to determine the widget's content height.
+
+        Args:
+            _container: Size of the container (immediate parent) widget.
+            _viewport: Size of the viewport.
+            _width: Width of renderable.
+
+        Returns:
+            The terminal height in lines.
+        """
+        return self._terminal_screen.lines

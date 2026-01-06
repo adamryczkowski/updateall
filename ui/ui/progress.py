@@ -68,13 +68,41 @@ class ProgressDisplay:
             self._live.stop()
             self._live = None
 
-    def start_plugin(self, plugin_name: str, total: int = 100) -> None:
-        """Start tracking a plugin's progress.
+    def add_plugin_pending(self, plugin_name: str, total: int = 100) -> None:
+        """Add a plugin in pending state (waiting to start).
 
         Args:
             plugin_name: Name of the plugin.
             total: Total steps for progress bar (default 100 for percentage).
         """
+        task_id = self._progress.add_task(
+            plugin_name,
+            total=total,
+            plugin_name=plugin_name,
+            status="[dim]⏳ Pending...[/dim]",
+            start=False,  # Don't start the task yet
+        )
+        self._tasks[plugin_name] = task_id
+
+    def start_plugin(self, plugin_name: str, total: int = 100) -> None:
+        """Start tracking a plugin's progress.
+
+        If the plugin was already added as pending, this will start it.
+        Otherwise, it will add and start the plugin.
+
+        Args:
+            plugin_name: Name of the plugin.
+            total: Total steps for progress bar (default 100 for percentage).
+        """
+        if plugin_name in self._tasks:
+            # Plugin was already added as pending, start it now
+            self._progress.start_task(self._tasks[plugin_name])
+            self._progress.update(
+                self._tasks[plugin_name],
+                status="Starting...",
+            )
+            return
+
         task_id = self._progress.add_task(
             plugin_name,
             total=total,

@@ -109,26 +109,37 @@ def run(
             help="Continue with remaining plugins after a failure.",
         ),
     ] = True,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive",
+            "-i",
+            help="Use interactive tabbed UI with live output for each plugin.",
+        ),
+    ] = False,
 ) -> None:
     """Run system updates.
 
     Execute updates for all enabled plugins or specific plugins if specified.
+
+    Use --interactive (-i) for a tabbed interface that shows live output
+    for each plugin and allows interaction (e.g., entering sudo password).
     """
-    asyncio.run(_run_updates(plugins, dry_run, verbose, continue_on_error))
+    asyncio.run(_run_updates(plugins, dry_run, verbose, continue_on_error, interactive))
 
 
 async def _run_updates(
     plugin_names: list[str] | None,
     dry_run: bool,
     verbose: bool,  # noqa: ARG001
-    continue_on_error: bool,
+    continue_on_error: bool,  # noqa: ARG001
+    interactive: bool = False,
 ) -> None:
     """Run updates asynchronously."""
     from plugins import register_builtin_plugins
     from plugins.registry import PluginRegistry
-    from ui.progress import ProgressDisplay
 
-    from core import ConfigManager, Orchestrator
+    from core import ConfigManager
 
     # Initialize components
     registry = PluginRegistry()
@@ -155,22 +166,41 @@ async def _run_updates(
     if dry_run:
         console.print("[yellow]Dry run mode - no changes will be made[/yellow]")
 
+    # Use interactive tabbed UI if requested
+    if interactive:
+        from ui.tabbed_run import run_with_tabbed_ui
+
+        await run_with_tabbed_ui(
+            plugins=plugins_to_run,
+            configs=config.plugins,
+            dry_run=dry_run,
+        )
+        return
+
+    # Standard progress display mode
+    from ui.progress import ProgressDisplay
+
+    from core import Orchestrator
+
     console.print(f"Running {len(plugins_to_run)} plugin(s)...")
 
     # Create orchestrator
-    orchestrator = Orchestrator(dry_run=dry_run, continue_on_error=continue_on_error)
+    orchestrator = Orchestrator(dry_run=dry_run, continue_on_error=True)
 
     # Run with progress display
     async with ProgressDisplay(console) as progress:
-        # Start tracking all plugins
+        # Add all plugins as pending first
         for plugin in plugins_to_run:
-            progress.start_plugin(plugin.name)
+            progress.add_plugin_pending(plugin.name)
 
         # Run plugins sequentially
         summary = await orchestrator.run_all(plugins_to_run, config.plugins)
 
         # Update progress display with results
         for result in summary.results:
+            # First start the plugin (changes from pending to running)
+            progress.start_plugin(result.plugin_name)
+
             if result.status.value == "success":
                 progress.complete_plugin(
                     result.plugin_name,

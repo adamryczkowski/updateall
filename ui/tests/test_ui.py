@@ -209,3 +209,99 @@ class TestProgressDisplay:
 
         # Should not raise
         display.skip_plugin("apt", reason="Not available")
+
+    def test_add_plugin_pending(self) -> None:
+        """Test adding a plugin in pending state."""
+        display = ProgressDisplay()
+
+        display.add_plugin_pending("apt")
+
+        assert "apt" in display._tasks
+
+    def test_start_pending_plugin(self) -> None:
+        """Test starting a plugin that was added as pending."""
+        display = ProgressDisplay()
+        display.add_plugin_pending("apt")
+
+        # Starting should not create a new task, just update the existing one
+        display.start_plugin("apt")
+
+        assert "apt" in display._tasks
+
+
+class TestPluginState:
+    """Tests for PluginState enum."""
+
+    def test_plugin_states(self) -> None:
+        """Test all plugin states exist."""
+        from ui.tabbed_run import PluginState
+
+        assert PluginState.PENDING.value == "pending"
+        assert PluginState.RUNNING.value == "running"
+        assert PluginState.SUCCESS.value == "success"
+        assert PluginState.FAILED.value == "failed"
+        assert PluginState.SKIPPED.value == "skipped"
+        assert PluginState.TIMEOUT.value == "timeout"
+
+
+class TestPluginTab:
+    """Tests for PluginTab dataclass."""
+
+    def test_plugin_tab_creation(self) -> None:
+        """Test creating a PluginTab."""
+        from unittest.mock import MagicMock
+
+        from ui.tabbed_run import PluginState, PluginTab
+
+        mock_plugin = MagicMock()
+        mock_plugin.name = "apt"
+
+        tab = PluginTab(name="apt", plugin=mock_plugin)
+
+        assert tab.name == "apt"
+        assert tab.state == PluginState.PENDING
+        assert tab.output_lines == []
+        assert tab.packages_updated == 0
+
+
+class TestPluginMessages:
+    """Tests for plugin message classes."""
+
+    def test_plugin_output_message(self) -> None:
+        """Test PluginOutputMessage creation."""
+        from ui.tabbed_run import PluginOutputMessage
+
+        msg = PluginOutputMessage("apt", "Installing packages...")
+
+        assert msg.plugin_name == "apt"
+        assert msg.line == "Installing packages..."
+
+    def test_plugin_state_changed(self) -> None:
+        """Test PluginStateChanged creation."""
+        from ui.tabbed_run import PluginState, PluginStateChanged
+
+        msg = PluginStateChanged("apt", PluginState.RUNNING)
+
+        assert msg.plugin_name == "apt"
+        assert msg.state == PluginState.RUNNING
+
+    def test_plugin_completed(self) -> None:
+        """Test PluginCompleted creation."""
+        from ui.tabbed_run import PluginCompleted
+
+        msg = PluginCompleted("apt", success=True, packages_updated=5)
+
+        assert msg.plugin_name == "apt"
+        assert msg.success is True
+        assert msg.packages_updated == 5
+        assert msg.error_message is None
+
+    def test_plugin_completed_with_error(self) -> None:
+        """Test PluginCompleted with error."""
+        from ui.tabbed_run import PluginCompleted
+
+        msg = PluginCompleted("apt", success=False, error_message="Command failed")
+
+        assert msg.plugin_name == "apt"
+        assert msg.success is False
+        assert msg.error_message == "Command failed"

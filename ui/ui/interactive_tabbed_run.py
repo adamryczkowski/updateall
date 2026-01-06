@@ -149,6 +149,16 @@ class ProgressBar(Static):
         self.update(text)
 
 
+def _get_ui_version() -> str:
+    """Get the UI package version."""
+    try:
+        import importlib.metadata
+
+        return importlib.metadata.version("update-all-ui")
+    except Exception:
+        return "unknown"
+
+
 class InteractiveTabbedApp(App[None]):
     """Textual application for running plugins with interactive PTY terminals.
 
@@ -164,6 +174,8 @@ class InteractiveTabbedApp(App[None]):
         app = InteractiveTabbedApp(plugins=[apt_plugin, flatpak_plugin])
         await app.run_async()
     """
+
+    TITLE = f"InteractiveTabbedApp (UI v{_get_ui_version()})"
 
     CSS = """
     InteractiveTabbedApp {

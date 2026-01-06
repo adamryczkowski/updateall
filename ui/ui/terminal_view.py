@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.style import Style
 from rich.text import Text
 from textual.reactive import reactive
@@ -19,6 +19,7 @@ from textual.strip import Strip
 from textual.widget import Widget
 
 if TYPE_CHECKING:
+    from textual.app import RenderResult
     from textual.geometry import Size
 
 from ui.terminal_screen import StyledChar, TerminalScreen
@@ -234,6 +235,18 @@ class TerminalView(Widget):
     def clear_dirty(self) -> None:
         """Clear the dirty line tracking."""
         self._terminal_screen.clear_dirty()
+
+    def render(self) -> RenderResult:
+        """Render the terminal content.
+
+        This method is called by Textual to get the widget's content.
+        It returns a Rich Group containing all terminal lines.
+
+        Returns:
+            A Rich Group containing all terminal lines as Text objects.
+        """
+        lines = self.render_terminal_lines()
+        return Group(*lines)
 
     def render_terminal_lines(self) -> list[Text]:
         """Render the terminal screen as Rich Text objects.

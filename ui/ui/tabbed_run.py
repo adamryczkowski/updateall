@@ -730,17 +730,17 @@ class TabbedRunApp(App[None]):
                 tab = PluginTab(name=plugin.name, plugin=plugin)
                 self.plugin_tabs[plugin.name] = tab
 
-                with (
-                    TabPane(plugin.name, id=f"tab-{plugin.name}"),
-                    Vertical(classes="plugin-container"),
-                ):
-                    status_bar = StatusBar(plugin.name, id=f"status-{plugin.name}")
-                    self.status_bars[plugin.name] = status_bar
-                    yield status_bar
+                with TabPane(plugin.name, id=f"tab-{plugin.name}"):  # noqa: SIM117
+                    with Vertical(
+                        classes="plugin-container"
+                    ):  # Nested for Textual widget hierarchy
+                        status_bar = StatusBar(plugin.name, id=f"status-{plugin.name}")
+                        self.status_bars[plugin.name] = status_bar
+                        yield status_bar
 
-                    log_panel = PluginLogPanel(plugin.name, id=f"log-{plugin.name}")
-                    self.log_panels[plugin.name] = log_panel
-                    yield log_panel
+                        log_panel = PluginLogPanel(plugin.name, id=f"log-{plugin.name}")
+                        self.log_panels[plugin.name] = log_panel
+                        yield log_panel
 
         yield ProgressPanel(len(self.plugins), id="progress")
         yield Static(

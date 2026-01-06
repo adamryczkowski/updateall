@@ -167,9 +167,9 @@ async def _run_updates(
 
     # Use interactive tabbed UI if requested
     if interactive:
-        from ui.tabbed_run import run_with_tabbed_ui
+        from ui.interactive_tabbed_run import run_with_interactive_tabbed_ui
 
-        await run_with_tabbed_ui(
+        await run_with_interactive_tabbed_ui(
             plugins=plugins_to_run,
             configs=config.plugins,
             dry_run=dry_run,

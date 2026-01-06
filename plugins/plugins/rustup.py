@@ -44,7 +44,7 @@ class RustupPlugin(BasePlugin):
         """
         return_code, stdout, stderr = await self._run_command(
             ["rustup", "update"],
-            timeout=config.timeout,
+            timeout=config.timeout_seconds,
             sudo=False,  # rustup runs as user
         )
 

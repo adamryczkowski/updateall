@@ -6,15 +6,11 @@ import asyncio
 import shutil
 from abc import abstractmethod
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
 import structlog
 
 from core.interfaces import UpdatePlugin
-from core.models import PluginResult, UpdateStatus
-
-if TYPE_CHECKING:
-    from core.models import PluginConfig
+from core.models import ExecutionResult, PluginConfig, PluginResult, PluginStatus, UpdateStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -49,11 +45,46 @@ class BasePlugin(UpdatePlugin):
         """Check if the plugin's command is available on the system."""
         return shutil.which(self.command) is not None
 
-    async def run_update(self, config: PluginConfig) -> PluginResult:
+    async def execute(self, dry_run: bool = False) -> ExecutionResult:
+        """Execute the update process.
+
+        This method implements the UpdatePlugin interface and is called by the orchestrator.
+
+        Args:
+            dry_run: If True, simulate the update without making changes.
+
+        Returns:
+            ExecutionResult with status and details.
+        """
+        # Create a default config for execution
+        config = PluginConfig(name=self.name)
+
+        # Run the update using the internal method
+        result = await self.run_update(config, dry_run=dry_run)
+
+        # Convert PluginResult to ExecutionResult
+        duration = None
+        if result.end_time and result.start_time:
+            duration = (result.end_time - result.start_time).total_seconds()
+
+        return ExecutionResult(
+            plugin_name=result.plugin_name,
+            status=PluginStatus(result.status.value),
+            start_time=result.start_time,
+            end_time=result.end_time,
+            duration_seconds=duration,
+            stdout=result.output,
+            stderr="",
+            error_message=result.error_message,
+            packages_updated=result.packages_updated,
+        )
+
+    async def run_update(self, config: PluginConfig, *, dry_run: bool = False) -> PluginResult:
         """Run the update process.
 
         Args:
             config: Plugin configuration including timeout and options.
+            dry_run: If True, simulate the update without making changes.
 
         Returns:
             PluginResult with status, output, and timing information.
@@ -61,7 +92,7 @@ class BasePlugin(UpdatePlugin):
         start_time = datetime.now(tz=UTC)
         log = logger.bind(plugin=self.name)
 
-        log.info("starting_update", timeout=config.timeout)
+        log.info("starting_update", timeout=config.timeout_seconds, dry_run=dry_run)
 
         try:
             # Check availability first
@@ -73,6 +104,18 @@ class BasePlugin(UpdatePlugin):
                     end_time=datetime.now(tz=UTC),
                     output="",
                     error_message=f"Command '{self.command}' not found",
+                    packages_updated=0,
+                )
+
+            # In dry-run mode, just report what would be done
+            if dry_run:
+                return PluginResult(
+                    plugin_name=self.name,
+                    status=UpdateStatus.SUCCESS,
+                    start_time=start_time,
+                    end_time=datetime.now(tz=UTC),
+                    output="Dry run - no changes made",
+                    error_message=None,
                     packages_updated=0,
                 )
 
@@ -107,14 +150,14 @@ class BasePlugin(UpdatePlugin):
             )
 
         except TimeoutError:
-            log.warning("update_timeout", timeout=config.timeout)
+            log.warning("update_timeout", timeout=config.timeout_seconds)
             return PluginResult(
                 plugin_name=self.name,
                 status=UpdateStatus.TIMEOUT,
                 start_time=start_time,
                 end_time=datetime.now(tz=UTC),
                 output="",
-                error_message=f"Update timed out after {config.timeout} seconds",
+                error_message=f"Update timed out after {config.timeout_seconds} seconds",
                 packages_updated=0,
             )
         except Exception as e:

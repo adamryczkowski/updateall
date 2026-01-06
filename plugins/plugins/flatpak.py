@@ -44,7 +44,7 @@ class FlatpakPlugin(BasePlugin):
         """
         return_code, stdout, stderr = await self._run_command(
             ["flatpak", "update", "-y", "--noninteractive"],
-            timeout=config.timeout,
+            timeout=config.timeout_seconds,
             sudo=False,  # flatpak can run as user
         )
 

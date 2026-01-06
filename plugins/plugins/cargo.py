@@ -60,7 +60,7 @@ class CargoPlugin(BasePlugin):
         """
         return_code, stdout, stderr = await self._run_command(
             ["cargo", "install-update", "-a"],
-            timeout=config.timeout,
+            timeout=config.timeout_seconds,
             sudo=False,  # cargo runs as user
         )
 

@@ -45,7 +45,7 @@ class NpmPlugin(BasePlugin):
         # First, check for outdated packages
         return_code, stdout_outdated, _ = await self._run_command(
             ["npm", "outdated", "-g", "--json"],
-            timeout=config.timeout // 4,
+            timeout=config.timeout_seconds // 4,
             sudo=False,
         )
 
@@ -54,7 +54,7 @@ class NpmPlugin(BasePlugin):
         # Run the update
         return_code, stdout, stderr = await self._run_command(
             ["npm", "update", "-g"],
-            timeout=config.timeout,
+            timeout=config.timeout_seconds,
             sudo=False,  # npm global can be user-owned with nvm/fnm
         )
 

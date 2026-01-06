@@ -48,7 +48,7 @@ class AptPlugin(BasePlugin):
         # Step 1: apt update
         return_code, stdout, stderr = await self._run_command(
             ["apt", "update"],
-            timeout=config.timeout // 2,  # Use half timeout for update
+            timeout=config.timeout_seconds // 2,  # Use half timeout for update
             sudo=True,
         )
 
@@ -61,7 +61,7 @@ class AptPlugin(BasePlugin):
         # Step 2: apt upgrade
         return_code, stdout, stderr = await self._run_command(
             ["apt", "upgrade", "-y"],
-            timeout=config.timeout,
+            timeout=config.timeout_seconds,
             sudo=True,
         )
 

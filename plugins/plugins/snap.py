@@ -44,7 +44,7 @@ class SnapPlugin(BasePlugin):
         """
         return_code, stdout, stderr = await self._run_command(
             ["snap", "refresh"],
-            timeout=config.timeout,
+            timeout=config.timeout_seconds,
             sudo=True,
         )
 

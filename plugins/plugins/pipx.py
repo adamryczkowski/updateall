@@ -44,7 +44,7 @@ class PipxPlugin(BasePlugin):
         """
         return_code, stdout, stderr = await self._run_command(
             ["pipx", "upgrade-all"],
-            timeout=config.timeout,
+            timeout=config.timeout_seconds,
             sudo=False,  # pipx runs as user
         )
 

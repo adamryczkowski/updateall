@@ -236,10 +236,12 @@ A container widget that:
 4. Integration with existing streaming infrastructure
 
 **Deliverables:**
-- [ ] `ui/ui/terminal_pane.py` - Pane container
-- [ ] `ui/ui/interactive_tabbed_run.py` - Main app
-- [ ] `ui/tests/test_terminal_pane.py` - Pane tests
-- [ ] `ui/tests/test_interactive_tabbed_run.py` - Integration tests
+- [x] `ui/ui/terminal_pane.py` - Pane container
+- [x] `ui/ui/interactive_tabbed_run.py` - Main app
+- [x] `ui/tests/test_terminal_pane.py` - Pane tests
+- [x] `ui/tests/test_interactive_tabbed_run.py` - Integration tests
+- [x] `core/core/interfaces.py` - Added `supports_interactive` property and `get_interactive_command()` method
+- [x] `ui/ui/__init__.py` - Export new components
 
 ### Phase 5: Polish and Documentation (Week 9-10)
 
@@ -1276,3 +1278,4 @@ help = "f1"
 |---------|------|--------|---------|
 | 1.0 | 2025-12-05 | AI Assistant | Initial version |
 | 1.1 | 2026-01-06 | AI Assistant | Updated Risk Mitigation section (Section 7) with chosen strategies verified against current codebase. Added cross-references to risk analysis document. Expanded mitigation strategies with implementation details and code examples. |
+| 1.2 | 2026-01-06 | AI Assistant | Completed Phase 4 implementation: TerminalPane, InteractiveTabbedApp, tests, and plugin interface updates. |

@@ -1,0 +1,556 @@
+"""TerminalPane container widget for interactive terminal tabs.
+
+This module provides a TerminalPane widget that combines a TerminalView
+with a status bar and manages the connection between the view and a PTY session.
+
+Phase 4 - Integration
+See docs/interactive-tabs-implementation-plan.md section 3.2.5
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
+from typing import TYPE_CHECKING, ClassVar
+
+from textual.containers import Vertical
+from textual.message import Message
+from textual.reactive import reactive
+from textual.widget import Widget
+from textual.widgets import Static
+
+from ui.input_router import InputRouter
+from ui.key_bindings import KeyBindings
+from ui.pty_manager import PTYSessionManager
+from ui.pty_session import PTYReadTimeoutError
+from ui.terminal_view import TerminalView
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
+
+    from core.interfaces import UpdatePlugin
+
+
+class PaneState(str, Enum):
+    """State of a terminal pane."""
+
+    IDLE = "idle"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    EXITED = "exited"
+
+
+@dataclass
+class PaneConfig:
+    """Configuration for a terminal pane."""
+
+    # Terminal dimensions
+    columns: int = 80
+    lines: int = 24
+    scrollback_lines: int = 10000
+
+    # PTY settings
+    env: dict[str, str] = field(default_factory=dict)
+    cwd: str | None = None
+
+    # Display settings
+    show_status_bar: bool = True
+    show_scrollbar: bool = True
+
+
+class PaneOutputMessage(Message):
+    """Message sent when a pane produces output."""
+
+    def __init__(self, pane_id: str, data: bytes) -> None:
+        """Initialize the message.
+
+        Args:
+            pane_id: ID of the pane producing output.
+            data: Raw output data.
+        """
+        self.pane_id = pane_id
+        self.data = data
+        super().__init__()
+
+
+class PaneStateChanged(Message):
+    """Message sent when a pane's state changes."""
+
+    def __init__(self, pane_id: str, state: PaneState, exit_code: int | None = None) -> None:
+        """Initialize the message.
+
+        Args:
+            pane_id: ID of the pane.
+            state: New state of the pane.
+            exit_code: Exit code if process exited.
+        """
+        self.pane_id = pane_id
+        self.state = state
+        self.exit_code = exit_code
+        super().__init__()
+
+
+class PaneStatusBar(Static):
+    """Status bar for a terminal pane."""
+
+    DEFAULT_CSS = """
+    PaneStatusBar {
+        height: 1;
+        dock: top;
+        padding: 0 1;
+        background: $surface-darken-1;
+        color: $text-muted;
+    }
+
+    PaneStatusBar.running {
+        background: $primary;
+        color: $text;
+    }
+
+    PaneStatusBar.success {
+        background: $success;
+        color: $text;
+    }
+
+    PaneStatusBar.failed {
+        background: $error;
+        color: $text;
+    }
+
+    PaneStatusBar.exited {
+        background: $surface-darken-2;
+        color: $text-muted;
+    }
+    """
+
+    state: reactive[PaneState] = reactive(PaneState.IDLE)
+    status_message: reactive[str] = reactive("")
+
+    def __init__(
+        self,
+        pane_name: str,
+        *,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        """Initialize the status bar.
+
+        Args:
+            pane_name: Name of the pane to display.
+            name: Widget name.
+            id: Widget ID.
+            classes: CSS classes.
+        """
+        super().__init__(name=name, id=id, classes=classes)
+        self.pane_name = pane_name
+
+    def watch_state(self, state: PaneState) -> None:
+        """React to state changes.
+
+        Args:
+            state: New state.
+        """
+        # Update CSS classes
+        self.remove_class("idle", "running", "success", "failed", "exited")
+        self.add_class(state.value)
+        self._refresh_display()
+
+    def watch_status_message(self, message: str) -> None:  # noqa: ARG002
+        """React to status message changes.
+
+        Args:
+            message: New status message.
+        """
+        self._refresh_display()
+
+    def _refresh_display(self) -> None:
+        """Refresh the status bar display."""
+        icons = {
+            PaneState.IDLE: "⏸️",
+            PaneState.RUNNING: "🔄",
+            PaneState.SUCCESS: "✅",
+            PaneState.FAILED: "❌",
+            PaneState.EXITED: "⏹️",
+        }
+        icon = icons.get(self.state, "")
+
+        text = f"{icon} {self.pane_name}: {self.state.value.upper()}"
+        if self.status_message:
+            text += f" - {self.status_message}"
+
+        self.update(text)
+
+
+class TerminalPane(Widget):
+    """Container widget combining TerminalView with status bar and PTY management.
+
+    This widget provides:
+    - A TerminalView for rendering terminal output
+    - A status bar showing pane state
+    - Connection management between TerminalView and PTY session
+    - Input routing to the PTY session
+    - Plugin-specific configuration support
+
+    Example:
+        pane = TerminalPane(
+            pane_id="apt",
+            pane_name="APT Updates",
+            command=["/bin/bash", "-c", "apt update"],
+        )
+        await pane.start()
+    """
+
+    DEFAULT_CSS = """
+    TerminalPane {
+        height: 100%;
+        width: 100%;
+    }
+
+    TerminalPane > Vertical {
+        height: 100%;
+    }
+
+    TerminalPane TerminalView {
+        height: 1fr;
+        border: solid $primary;
+    }
+
+    TerminalPane.focused TerminalView {
+        border: solid $accent;
+    }
+    """
+
+    # Class-level session manager shared across all panes
+    _session_manager: ClassVar[PTYSessionManager | None] = None
+    _manager_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
+
+    # Reactive properties
+    is_focused: reactive[bool] = reactive(False)
+
+    def __init__(
+        self,
+        pane_id: str,
+        pane_name: str,
+        command: list[str],
+        *,
+        config: PaneConfig | None = None,
+        plugin: UpdatePlugin | None = None,
+        key_bindings: KeyBindings | None = None,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        """Initialize the terminal pane.
+
+        Args:
+            pane_id: Unique identifier for this pane.
+            pane_name: Display name for the pane.
+            command: Command to run in the PTY.
+            config: Pane configuration.
+            plugin: Associated plugin (optional).
+            key_bindings: Key bindings for input routing.
+            name: Widget name.
+            id: Widget ID.
+            classes: CSS classes.
+        """
+        super().__init__(name=name, id=id or f"pane-{pane_id}", classes=classes)
+
+        self.pane_id = pane_id
+        self.pane_name = pane_name
+        self.command = command
+        self.config = config or PaneConfig()
+        self.plugin = plugin
+        self.key_bindings = key_bindings or KeyBindings()
+
+        self._state = PaneState.IDLE
+        self._exit_code: int | None = None
+        self._start_time: datetime | None = None
+        self._end_time: datetime | None = None
+        self._read_task: asyncio.Task[None] | None = None
+
+        # Child widgets - initialized in compose()
+        self._terminal_view: TerminalView | None = None
+        self._status_bar: PaneStatusBar | None = None
+        self._input_router: InputRouter | None = None
+
+    @property
+    def state(self) -> PaneState:
+        """Get the current pane state."""
+        return self._state
+
+    @property
+    def exit_code(self) -> int | None:
+        """Get the exit code if the process has exited."""
+        return self._exit_code
+
+    @property
+    def terminal_view(self) -> TerminalView | None:
+        """Get the terminal view widget."""
+        return self._terminal_view
+
+    @property
+    def is_running(self) -> bool:
+        """Check if the PTY process is running."""
+        return self._state == PaneState.RUNNING
+
+    @classmethod
+    async def get_session_manager(cls) -> PTYSessionManager:
+        """Get or create the shared session manager.
+
+        Returns:
+            The shared PTYSessionManager instance.
+        """
+        async with cls._manager_lock:
+            if cls._session_manager is None:
+                cls._session_manager = PTYSessionManager()
+            return cls._session_manager
+
+    @classmethod
+    async def cleanup_session_manager(cls) -> None:
+        """Clean up the shared session manager."""
+        async with cls._manager_lock:
+            if cls._session_manager is not None:
+                await cls._session_manager.close_all()
+                cls._session_manager = None
+
+    def compose(self) -> ComposeResult:
+        """Compose the pane layout."""
+        with Vertical():
+            if self.config.show_status_bar:
+                self._status_bar = PaneStatusBar(
+                    self.pane_name,
+                    id=f"status-{self.pane_id}",
+                )
+                yield self._status_bar
+
+            self._terminal_view = TerminalView(
+                columns=self.config.columns,
+                lines=self.config.lines,
+                scrollback_lines=self.config.scrollback_lines,
+                id=f"terminal-{self.pane_id}",
+            )
+            yield self._terminal_view
+
+    async def on_mount(self) -> None:
+        """Handle mount event."""
+        # Set up input router
+        self._input_router = InputRouter(
+            key_bindings=self.key_bindings,
+            on_pty_input=self._handle_pty_input,
+        )
+        self._input_router.set_active_tab(self.pane_id)
+
+    async def on_unmount(self) -> None:
+        """Handle unmount event."""
+        await self.stop()
+
+    def watch_is_focused(self, focused: bool) -> None:
+        """React to focus changes.
+
+        Args:
+            focused: Whether the pane is focused.
+        """
+        if focused:
+            self.add_class("focused")
+        else:
+            self.remove_class("focused")
+
+    async def start(self) -> None:
+        """Start the PTY session and begin reading output."""
+        if self._state == PaneState.RUNNING:
+            return
+
+        self._state = PaneState.RUNNING
+        self._start_time = datetime.now(tz=UTC)
+        self._update_status_bar()
+
+        # Get session manager
+        manager = await self.get_session_manager()
+
+        # Prepare environment
+        env = dict(self.config.env)
+        env.setdefault("TERM", "xterm-256color")
+        env.setdefault("COLUMNS", str(self.config.columns))
+        env.setdefault("LINES", str(self.config.lines))
+
+        # Create PTY session
+        await manager.create_session(
+            command=self.command,
+            session_id=self.pane_id,
+            env=env,
+            cwd=self.config.cwd,
+            cols=self.config.columns,
+            rows=self.config.lines,
+        )
+
+        # Start reading output
+        self._read_task = asyncio.create_task(self._read_loop())
+
+        # Post state change message
+        self.post_message(PaneStateChanged(self.pane_id, self._state))
+
+    async def stop(self) -> None:
+        """Stop the PTY session."""
+        if self._read_task is not None:
+            self._read_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._read_task
+            self._read_task = None
+
+        manager = await self.get_session_manager()
+        await manager.close_session(self.pane_id)
+
+    async def write(self, data: bytes) -> None:
+        """Write data to the PTY session.
+
+        Args:
+            data: Data to write.
+        """
+        if self._state != PaneState.RUNNING:
+            return
+
+        manager = await self.get_session_manager()
+        # Session may have closed, so suppress any errors
+        with contextlib.suppress(Exception):
+            await manager.write_to_session(self.pane_id, data)
+
+    async def resize(self, columns: int, lines: int) -> None:
+        """Resize the terminal.
+
+        Args:
+            columns: New width in columns.
+            lines: New height in lines.
+        """
+        self.config.columns = columns
+        self.config.lines = lines
+
+        if self._terminal_view:
+            self._terminal_view.resize_terminal(columns, lines)
+
+        if self._state == PaneState.RUNNING:
+            manager = await self.get_session_manager()
+            # Session may have closed, so suppress any errors
+            with contextlib.suppress(Exception):
+                await manager.resize_session(self.pane_id, columns, lines)
+
+    async def _read_loop(self) -> None:
+        """Background task to read from PTY and update terminal view."""
+        manager = await self.get_session_manager()
+
+        try:
+            while self._state == PaneState.RUNNING:
+                try:
+                    data = await manager.read_from_session(
+                        self.pane_id,
+                        timeout=0.1,
+                    )
+                    if data:
+                        if self._terminal_view:
+                            self._terminal_view.feed(data)
+                        self.post_message(PaneOutputMessage(self.pane_id, data))
+                except PTYReadTimeoutError:
+                    continue
+                except Exception:
+                    break
+
+            # Check exit status
+            session = manager.get_session(self.pane_id)
+            if session:
+                self._exit_code = session.exit_code
+                if self._exit_code == 0:
+                    self._state = PaneState.SUCCESS
+                elif self._exit_code is not None:
+                    self._state = PaneState.FAILED
+                else:
+                    self._state = PaneState.EXITED
+            else:
+                self._state = PaneState.EXITED
+
+            self._end_time = datetime.now(tz=UTC)
+            self._update_status_bar()
+            self.post_message(PaneStateChanged(self.pane_id, self._state, self._exit_code))
+
+        except asyncio.CancelledError:
+            pass
+
+    async def _handle_pty_input(self, data: bytes, tab_id: str | None = None) -> None:
+        """Handle input from the input router.
+
+        Args:
+            data: Input data to send to PTY.
+            tab_id: Optional tab ID (unused, for interface compatibility).
+        """
+        del tab_id  # Unused, for interface compatibility
+        await self.write(data)
+
+    def _update_status_bar(self) -> None:
+        """Update the status bar state."""
+        if self._status_bar:
+            self._status_bar.state = self._state
+            if self._exit_code is not None:
+                self._status_bar.status_message = f"Exit code: {self._exit_code}"
+
+    async def process_key(self, key: str) -> bool:
+        """Process a key press and route it to the PTY.
+
+        Args:
+            key: Key string to handle.
+
+        Returns:
+            True if the key was handled, False otherwise.
+        """
+        if self._input_router and self.is_focused:
+            await self._input_router.route_key(key)
+            return True
+        return False
+
+    async def process_text(self, text: str) -> None:
+        """Process text input and route it to the PTY.
+
+        Args:
+            text: Text to send to PTY.
+        """
+        if self._input_router and self.is_focused:
+            await self._input_router.route_text(text)
+
+    async def paste_text(self, text: str) -> None:
+        """Paste text to the PTY.
+
+        Args:
+            text: Text to paste.
+        """
+        if self._input_router and self.is_focused:
+            await self._input_router.paste(text)
+
+    def scroll_history_up(self, lines: int = 1) -> None:
+        """Scroll up in the terminal history.
+
+        Args:
+            lines: Number of lines to scroll.
+        """
+        if self._terminal_view:
+            self._terminal_view.scroll_history_up(lines)
+
+    def scroll_history_down(self, lines: int = 1) -> None:
+        """Scroll down in the terminal history.
+
+        Args:
+            lines: Number of lines to scroll.
+        """
+        if self._terminal_view:
+            self._terminal_view.scroll_history_down(lines)
+
+    def scroll_to_history_top(self) -> None:
+        """Scroll to the top of history."""
+        if self._terminal_view:
+            self._terminal_view.scroll_to_top()
+
+    def scroll_to_history_bottom(self) -> None:
+        """Scroll to the bottom (current output)."""
+        if self._terminal_view:
+            self._terminal_view.scroll_to_bottom()

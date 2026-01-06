@@ -20,6 +20,11 @@ Phase 3 - Input Handling adds:
 - KeyBindings: Configurable key binding system
 - InputRouter: Keyboard input routing between app and PTY
 - See docs/interactive-tabs-implementation-plan.md
+
+Phase 4 - Integration adds:
+- TerminalPane: Container widget combining TerminalView with PTY management
+- InteractiveTabbedApp: Main application with PTY-based terminal tabs
+- See docs/interactive-tabs-implementation-plan.md
 """
 
 from ui.event_handler import (
@@ -30,6 +35,10 @@ from ui.event_handler import (
     UIEventHandler,
 )
 from ui.input_router import InputRouter, RouteTarget
+from ui.interactive_tabbed_run import (
+    InteractiveTabbedApp,
+    run_with_interactive_tabbed_ui,
+)
 from ui.key_bindings import InvalidKeyError, KeyBindings, normalize_key
 from ui.panels import SummaryPanel
 from ui.progress import ProgressDisplay
@@ -59,6 +68,13 @@ from ui.tabbed_run import (
     run_with_tabbed_ui,
 )
 from ui.tables import ResultsTable
+from ui.terminal_pane import (
+    PaneConfig,
+    PaneOutputMessage,
+    PaneState,
+    PaneStateChanged,
+    TerminalPane,
+)
 from ui.terminal_screen import StyledChar, TerminalScreen
 from ui.terminal_view import TerminalView, ansi_color_to_rich_color
 
@@ -67,6 +83,7 @@ __all__ = [
     "BatchedEventHandler",
     "CallbackEventHandler",
     "InputRouter",
+    "InteractiveTabbedApp",
     "InvalidKeyError",
     "KeyBindings",
     "PTYAlreadyStartedError",
@@ -75,6 +92,10 @@ __all__ = [
     "PTYReadTimeoutError",
     "PTYSession",
     "PTYSessionManager",
+    "PaneConfig",
+    "PaneOutputMessage",
+    "PaneState",
+    "PaneStateChanged",
     "PluginProgressMessage",
     "PluginState",
     "ProgressDisplay",
@@ -88,6 +109,7 @@ __all__ = [
     "SudoStatus",
     "SummaryPanel",
     "TabbedRunApp",
+    "TerminalPane",
     "TerminalScreen",
     "TerminalView",
     "TextualBatchedEventHandler",
@@ -99,5 +121,6 @@ __all__ = [
     "is_pty_available",
     "normalize_key",
     "refresh_sudo_timestamp",
+    "run_with_interactive_tabbed_ui",
     "run_with_tabbed_ui",
 ]

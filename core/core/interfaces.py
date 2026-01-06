@@ -365,6 +365,43 @@ class UpdatePlugin(ABC):
         async for event in self.execute_streaming(dry_run=dry_run):
             yield event
 
+    # =========================================================================
+    # Interactive Mode Interface (Phase 4 - Interactive Tabs Integration)
+    # =========================================================================
+
+    @property
+    def supports_interactive(self) -> bool:
+        """Check if this plugin supports interactive mode with PTY.
+
+        Plugins that can run in an interactive PTY session should override
+        this property to return True. This enables:
+        - Full terminal emulation with ANSI escape sequences
+        - Interactive prompts (sudo, confirmations, etc.)
+        - Live progress display with cursor movement
+
+        Returns:
+            True if the plugin supports interactive PTY mode, False otherwise.
+        """
+        return False
+
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Get the command to run in interactive mode.
+
+        This method returns the command and arguments to execute in a PTY
+        session. Override this method to provide the appropriate command
+        for your plugin.
+
+        Args:
+            dry_run: If True, return a command that simulates the update.
+
+        Returns:
+            Command and arguments as a list of strings.
+
+        Raises:
+            NotImplementedError: If the plugin does not support interactive mode.
+        """
+        raise NotImplementedError(f"Plugin '{self.name}' does not support interactive mode")
+
 
 class PluginExecutor(ABC):
     """Abstract base class for plugin executors.

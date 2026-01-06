@@ -6,7 +6,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -51,7 +51,7 @@ class HistoryStore:
         if not self.history_file.exists():
             self.history_file.write_text("[]")
 
-    def _load_history(self) -> list[dict]:
+    def _load_history(self) -> list[dict[str, Any]]:
         """Load history from file.
 
         Returns:
@@ -64,7 +64,7 @@ class HistoryStore:
             logger.warning("failed_to_load_history", error=str(e))
             return []
 
-    def _save_history(self, history: list[dict]) -> None:
+    def _save_history(self, history: list[dict[str, Any]]) -> None:
         """Save history to file.
 
         Args:
@@ -105,7 +105,7 @@ class HistoryStore:
         self._save_history(history)
         logger.info("run_saved", run_id=run_result.run_id)
 
-    def get_recent_runs(self, limit: int = 10) -> list[dict]:
+    def get_recent_runs(self, limit: int = 10) -> list[dict[str, Any]]:
         """Get the most recent runs.
 
         Args:
@@ -119,7 +119,7 @@ class HistoryStore:
         history.sort(key=lambda x: x.get("start_time", ""), reverse=True)
         return history[:limit]
 
-    def get_runs_by_plugin(self, plugin_name: str, limit: int = 10) -> list[dict]:
+    def get_runs_by_plugin(self, plugin_name: str, limit: int = 10) -> list[dict[str, Any]]:
         """Get runs that include a specific plugin.
 
         Args:
@@ -142,7 +142,7 @@ class HistoryStore:
         self,
         start: datetime,
         end: datetime | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Get runs within a date range.
 
         Args:

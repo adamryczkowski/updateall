@@ -272,4 +272,5 @@ hosts:
         result = await manager.run_update_single("nonexistent")
 
         assert result.success is False
+        assert result.error_message is not None
         assert "not found" in result.error_message.lower()

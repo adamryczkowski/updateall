@@ -309,7 +309,8 @@ class RemoteExecutor:
             # Run a simple command to verify
             if self._connection:
                 result = await self._connection.run("echo ok", check=True)
-                return result.stdout.strip() == "ok"
+                stdout = str(result.stdout).strip() if result.stdout else ""
+                return stdout == "ok"
             return False
         except Exception as e:
             logger.warning("connection_check_failed", host=self.config.hostname, error=str(e))

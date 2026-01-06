@@ -40,6 +40,17 @@ from core.remote import (
     ResilientRemoteExecutor,
 )
 from core.resource import ResourceContext, ResourceController, ResourceLimits, ResourceUsage
+from core.rollback import (
+    PluginSnapshot,
+    RollbackError,
+    RollbackManager,
+    RollbackPoint,
+    RollbackResult,
+    RollbackStatus,
+    SnapshotError,
+    SnapshotManager,
+    SnapshotType,
+)
 from core.schedule import (
     ScheduleError,
     ScheduleInterval,
@@ -74,6 +85,7 @@ __all__ = [
     "PluginMetadata",
     "PluginNode",
     "PluginResult",
+    "PluginSnapshot",
     "PluginStatus",
     "ProgressEvent",
     "ProgressEventType",
@@ -86,6 +98,11 @@ __all__ = [
     "ResourceController",
     "ResourceLimits",
     "ResourceUsage",
+    "RollbackError",
+    "RollbackManager",
+    "RollbackPoint",
+    "RollbackResult",
+    "RollbackStatus",
     "RunResult",
     "ScheduleError",
     "ScheduleInterval",
@@ -93,6 +110,9 @@ __all__ = [
     "ScheduleStatus",
     "Scheduler",
     "SchedulingError",
+    "SnapshotError",
+    "SnapshotManager",
+    "SnapshotType",
     "StandardMutexes",
     "SystemConfig",
     "UpdatePlugin",

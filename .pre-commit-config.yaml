@@ -34,6 +34,8 @@ repos:
         exclude: ^poetry\.lock$
 
   # Mypy - static type checker
+  # Note: Each subproject runs mypy via poetry in its own environment.
+  # Pre-commit mypy only checks files that don't depend on local path dependencies.
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.14.1
     hooks:
@@ -42,8 +44,8 @@ repos:
           - pydantic>=2.12
           - types-PyYAML
         args: [--ignore-missing-imports, --explicit-package-bases]
-        # Exclude all tests directories to avoid duplicate module name conflicts
-        exclude: (^|/)tests/
+        # Exclude tests directories and CLI (depends on local path packages)
+        exclude: (^|/)tests/|^cli/
 
 # Configuration for pre-commit CI
 ci:

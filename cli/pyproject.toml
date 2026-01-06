@@ -39,6 +39,9 @@ python = "^3.11"
 typer = "^0.21"
 rich = "^14.2"
 update-all-core = { path = "../core", develop = true }
+update-all-plugins = { path = "../plugins", develop = true }
+update-all-ui = { path = "../ui", develop = true }
+update-all-stats = { path = "../stats", develop = true }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

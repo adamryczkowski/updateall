@@ -130,3 +130,32 @@ class PluginMetadata(BaseModel):
         default_factory=lambda: ["linux"], description="Supported platforms"
     )
     dependencies: list[str] = Field(default_factory=list, description="Plugin dependencies")
+
+
+class RunResult(BaseModel):
+    """Result of a complete update run.
+
+    Used for storing run history and statistics.
+    """
+
+    run_id: str = Field(..., description="Unique run identifier")
+    start_time: datetime = Field(..., description="Run start time")
+    end_time: datetime | None = Field(default=None, description="Run end time")
+    plugin_results: list[PluginResult] = Field(
+        default_factory=list, description="Results for each plugin"
+    )
+
+    @property
+    def total_packages_updated(self) -> int:
+        """Total packages updated across all plugins."""
+        return sum(r.packages_updated for r in self.plugin_results)
+
+    @property
+    def success_count(self) -> int:
+        """Number of successful plugin runs."""
+        return sum(1 for r in self.plugin_results if r.status == PluginStatus.SUCCESS)
+
+    @property
+    def failure_count(self) -> int:
+        """Number of failed plugin runs."""
+        return sum(1 for r in self.plugin_results if r.status == PluginStatus.FAILED)

@@ -1,73 +1,30 @@
-feat: Initialize update-all Python monorepo for Milestone 1 (MVP)
+feat(core,cli,plugins): implement Milestone 1 - MVP foundation
 
-This commit sets up the complete project structure for the update-all
-system - a plugin-driven system update orchestrator for Linux.
+Implement the core MVP functionality for update-all:
 
-## Project Structure
+## Core Module
+- Add ConfigManager with YAML configuration support (XDG spec)
+- Add YamlConfigLoader for loading/saving YAML config files
+- Add Orchestrator for sequential plugin execution
+- Add RunResult model for tracking execution results
+- Add comprehensive tests (28 new tests)
 
-The project is organized as a monorepo with 5 independent Poetry subprojects:
+## CLI Module
+- Integrate orchestrator with run command
+- Add check command for checking available updates
+- Add status command for plugin status display
+- Add history command with stats integration
+- Add plugins subcommands (list, enable, disable)
+- Add config subcommands (show, init, path)
+- Add Rich progress display integration
+- Update tests for new commands
 
-- **core**: Core models, interfaces, and abstractions
-- **cli**: Typer-based command-line interface
-- **plugins**: Update plugins for apt, pipx, flatpak
-- **ui**: Rich-based terminal UI components
-- **stats**: Update history and statistics tracking
+## Plugins Module
+- Add register_builtin_plugins() helper function
+- Export register_builtin_plugins in __all__
 
-## Key Features Implemented
+## Pre-commit
+- Exclude cli/ from mypy in pre-commit (uses local path deps)
+- CLI mypy checking is done via poetry in subproject
 
-### Core Module
-- Pydantic models for configuration (PluginConfig, GlobalConfig, SystemConfig)
-- Execution result models (ExecutionResult, PluginResult, ExecutionSummary)
-- Abstract plugin interface (UpdatePlugin) with lifecycle hooks
-- Plugin executor and config loader interfaces
-
-### CLI Module
-- Main Typer application with rich markup support
-- Commands: run, status, history
-- Subcommands: plugins (list, enable, disable), config (show, init)
-- Version flag with callback
-
-### Plugins Module
-- BasePlugin abstract class with common functionality
-- Command execution with timeout handling and sudo support
-- Concrete plugins: AptPlugin, PipxPlugin, FlatpakPlugin
-- Plugin registry with entry point discovery support
-
-### UI Module
-- ProgressDisplay: Live progress tracking with Rich
-- ResultsTable: Formatted results display
-- SummaryPanel: Update run summary with statistics
-
-### Stats Module
-- HistoryStore: JSON-based persistent history storage
-- StatsCalculator: Aggregate statistics calculation
-- XDG Base Directory Specification compliance
-
-## Development Infrastructure
-
-- Poetry 2.x with PEP 621 project metadata
-- Ruff for linting and formatting (v0.14.10)
-- pytest with asyncio support and coverage
-- pre-commit hooks (ruff, codespell, check-yaml)
-- Justfile for task automation with shared recipes
-- Comprehensive test suites (75 tests total, all passing)
-
-## Dependencies (Current Versions)
-
-- Python 3.12+
-- Typer 0.21.0
-- Rich 14.2.0
-- Pydantic 2.12.5
-- structlog 25.5.0
-- pytest 8.4.2
-- ruff 0.14.10
-
-## Validation
-
-All subprojects pass:
-- Ruff linting (no errors)
-- Ruff formatting (all files formatted)
-- pytest tests (75 tests passing)
-
-This implements the foundation for Milestone 1 (MVP) as described in
-docs/update-all-python-plan.md.
+All 106 tests pass across all subprojects.

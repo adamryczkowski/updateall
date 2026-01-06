@@ -4,9 +4,19 @@ This module defines abstract base classes for plugins and executors.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
-from .models import ExecutionResult, PluginMetadata
+from .models import ExecutionResult, PluginMetadata, PluginStatus
+from .streaming import (
+    CompletionEvent,
+    EventType,
+    OutputEvent,
+    Phase,
+    PhaseEvent,
+    StreamEvent,
+)
 
 
 class UpdatePlugin(ABC):
@@ -88,6 +98,126 @@ class UpdatePlugin(ABC):
             result: The execution result
         """
         pass
+
+    # =========================================================================
+    # Streaming Interface (Phase 1 - Core Streaming Infrastructure)
+    # =========================================================================
+
+    @property
+    def supports_streaming(self) -> bool:
+        """Check if this plugin supports streaming output.
+
+        Plugins that override execute_streaming() should return True.
+        This allows the UI to choose between streaming and batch modes.
+
+        Returns:
+            True if streaming is supported, False otherwise.
+        """
+        return False
+
+    async def execute_streaming(
+        self,
+        dry_run: bool = False,
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute the update process with streaming output.
+
+        This method provides real-time output during plugin execution.
+        The default implementation wraps execute() for backward compatibility.
+
+        Override this method to provide native streaming support.
+
+        Args:
+            dry_run: If True, simulate the update without making changes.
+
+        Yields:
+            StreamEvent objects as the plugin executes.
+            The final event should be a CompletionEvent.
+        """
+        # Default implementation wraps execute() for backward compatibility
+        result = await self.execute(dry_run=dry_run)
+
+        # Emit output lines
+        if result.stdout:
+            for line in result.stdout.splitlines():
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=line,
+                    stream="stdout",
+                )
+
+        if result.stderr:
+            for line in result.stderr.splitlines():
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=line,
+                    stream="stderr",
+                )
+
+        # Emit completion
+        yield CompletionEvent(
+            event_type=EventType.COMPLETION,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            success=result.status == PluginStatus.SUCCESS,
+            exit_code=result.exit_code or 0,
+            packages_updated=result.packages_updated,
+            error_message=result.error_message,
+        )
+
+    async def check_updates_streaming(self) -> AsyncIterator[StreamEvent]:
+        """Check for updates with streaming output.
+
+        This method provides real-time output during update checking.
+        The default implementation wraps check_updates().
+
+        Override this method to provide native streaming support.
+
+        Yields:
+            StreamEvent objects during the check process.
+        """
+        # Emit phase start
+        yield PhaseEvent(
+            event_type=EventType.PHASE_START,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.CHECK,
+        )
+
+        try:
+            updates = await self.check_updates()
+
+            # Emit phase end with success
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.CHECK,
+                success=True,
+            )
+
+            # Emit output with update count
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=f"Found {len(updates)} updates available",
+                stream="stdout",
+            )
+
+        except Exception as e:
+            # Emit phase end with failure
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.CHECK,
+                success=False,
+                error_message=str(e),
+            )
 
 
 class PluginExecutor(ABC):

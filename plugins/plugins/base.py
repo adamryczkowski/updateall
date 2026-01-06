@@ -8,11 +8,25 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 import structlog
 
 from core.interfaces import UpdatePlugin
 from core.models import ExecutionResult, PluginConfig, PluginResult, PluginStatus, UpdateStatus
+from core.streaming import (
+    CompletionEvent,
+    EventType,
+    OutputEvent,
+    Phase,
+    PhaseEvent,
+    StreamEvent,
+    StreamEventQueue,
+    parse_progress_line,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 logger = structlog.get_logger(__name__)
 
@@ -281,6 +295,336 @@ class BasePlugin(UpdatePlugin):
             except Exception:
                 pass
             raise TimeoutError(f"Command timed out after {timeout}s") from e
+
+    # =========================================================================
+    # Streaming Execution (Phase 1 - Core Streaming Infrastructure)
+    # =========================================================================
+
+    @property
+    def supports_streaming(self) -> bool:
+        """Check if this plugin supports streaming output.
+
+        BasePlugin provides native streaming support via _run_command_streaming.
+
+        Returns:
+            True - BasePlugin supports streaming.
+        """
+        return True
+
+    async def _run_command_streaming(
+        self,
+        cmd: list[str],
+        timeout: int,
+        *,
+        sudo: bool = False,
+        phase: Phase = Phase.EXECUTE,  # noqa: ARG002
+    ) -> AsyncIterator[StreamEvent]:
+        """Run a command with streaming output.
+
+        This method streams output line-by-line as the command executes,
+        enabling real-time display in the UI.
+
+        Args:
+            cmd: Command and arguments as a list.
+            timeout: Timeout in seconds.
+            sudo: Whether to prepend sudo to the command.
+            phase: Current execution phase (reserved for future progress events).
+
+        Yields:
+            StreamEvent objects as output is produced.
+            Final event is always a CompletionEvent.
+        """
+        if sudo:
+            cmd = ["sudo", *cmd]
+
+        log = logger.bind(plugin=self.name, command=" ".join(cmd))
+        log.debug("running_command_streaming")
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Use bounded queue for backpressure (Risk T3 mitigation)
+        queue: StreamEventQueue = StreamEventQueue(maxsize=1000)
+
+        async def read_stream(
+            stream: asyncio.StreamReader | None,
+            stream_name: str,
+        ) -> None:
+            """Read lines from a stream and put events in queue."""
+            if stream is None:
+                return
+
+            while True:
+                try:
+                    line = await stream.readline()
+                    if not line:
+                        break
+
+                    line_str = line.decode("utf-8", errors="replace").rstrip()
+
+                    # Check for JSON progress events (PROGRESS: prefix)
+                    progress_event = parse_progress_line(line_str, self.name)
+                    if progress_event:
+                        await queue.put(progress_event)
+                        continue
+
+                    # Regular output line
+                    await queue.put(
+                        OutputEvent(
+                            event_type=EventType.OUTPUT,
+                            plugin_name=self.name,
+                            timestamp=datetime.now(tz=UTC),
+                            line=line_str,
+                            stream=stream_name,
+                        )
+                    )
+                except Exception as e:
+                    log.warning("stream_read_error", stream=stream_name, error=str(e))
+                    break
+
+        # Use TaskGroup for concurrent stream reading (Risk T2 mitigation)
+        try:
+            async with asyncio.timeout(timeout):
+                # Start stream readers as tasks
+                async with asyncio.TaskGroup() as tg:
+                    stdout_task = tg.create_task(read_stream(process.stdout, "stdout"))
+                    stderr_task = tg.create_task(read_stream(process.stderr, "stderr"))
+
+                    # Yield events from queue while tasks are running
+                    async def yield_events() -> None:
+                        """Signal when both streams are done."""
+                        await stdout_task
+                        await stderr_task
+                        await queue.close()
+
+                    tg.create_task(yield_events())
+
+                    # Yield events as they arrive
+                    async for event in queue:
+                        yield event
+
+                # Wait for process to complete
+                await process.wait()
+
+                # Log if events were dropped
+                if queue.dropped_count > 0:
+                    log.warning(
+                        "events_dropped",
+                        dropped_count=queue.dropped_count,
+                    )
+
+                # Emit completion event
+                yield CompletionEvent(
+                    event_type=EventType.COMPLETION,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    success=process.returncode == 0,
+                    exit_code=process.returncode or 0,
+                )
+
+        except TimeoutError:
+            log.warning("command_streaming_timeout", timeout=timeout)
+            # Kill the process
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message=f"Command timed out after {timeout}s",
+            )
+
+        except ExceptionGroup as eg:
+            # Handle exceptions from TaskGroup
+            log.exception("streaming_exception_group", errors=str(eg.exceptions))
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message=f"Streaming error: {eg.exceptions[0]}",
+            )
+
+    async def execute_streaming(
+        self,
+        dry_run: bool = False,
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute the update process with streaming output.
+
+        This method provides real-time output during plugin execution.
+        Override this method to provide custom streaming behavior.
+
+        Args:
+            dry_run: If True, simulate the update without making changes.
+
+        Yields:
+            StreamEvent objects as the plugin executes.
+            The final event is always a CompletionEvent.
+        """
+        log = logger.bind(plugin=self.name)
+
+        # Emit phase start
+        yield PhaseEvent(
+            event_type=EventType.PHASE_START,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            phase=Phase.EXECUTE,
+        )
+
+        # Check availability first
+        if not await self.check_available():
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=f"Command '{self.command}' not found - skipping",
+                stream="stderr",
+            )
+
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.EXECUTE,
+                success=False,
+                error_message=f"Command '{self.command}' not found",
+            )
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message=f"Command '{self.command}' not found",
+            )
+            return
+
+        # In dry-run mode, just report what would be done
+        if dry_run:
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line="Dry run - no changes made",
+                stream="stdout",
+            )
+
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.EXECUTE,
+                success=True,
+            )
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=True,
+                exit_code=0,
+            )
+            return
+
+        # Run the streaming update
+        log.info("starting_streaming_update")
+
+        try:
+            final_success = False
+            final_error: str | None = None
+
+            async for event in self._execute_update_streaming():
+                yield event
+
+                # Track completion status
+                if isinstance(event, CompletionEvent):
+                    final_success = event.success
+                    final_error = event.error_message
+
+            # Emit phase end
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.EXECUTE,
+                success=final_success,
+                error_message=final_error,
+            )
+
+            log.info("streaming_update_completed", success=final_success)
+
+        except Exception as e:
+            log.exception("streaming_update_error", error=str(e))
+
+            yield PhaseEvent(
+                event_type=EventType.PHASE_END,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                phase=Phase.EXECUTE,
+                success=False,
+                error_message=str(e),
+            )
+
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=-1,
+                error_message=str(e),
+            )
+
+    async def _execute_update_streaming(self) -> AsyncIterator[StreamEvent]:
+        """Execute the actual update commands with streaming.
+
+        Override this method in subclasses to provide streaming update execution.
+        The default implementation falls back to the non-streaming _execute_update.
+
+        Yields:
+            StreamEvent objects as the update executes.
+        """
+        # Default: fall back to non-streaming execution
+        config = PluginConfig(name=self.name)
+        output, error = await self._execute_update(config)
+
+        # Emit output lines
+        if output:
+            for line in output.splitlines():
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=line,
+                    stream="stdout",
+                )
+
+        # Emit completion
+        yield CompletionEvent(
+            event_type=EventType.COMPLETION,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            success=error is None,
+            exit_code=0 if error is None else 1,
+            packages_updated=self._count_updated_packages(output) if output else 0,
+            error_message=error,
+        )
 
     # =========================================================================
     # Self-Update Mechanism (Phase 3)

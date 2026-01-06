@@ -17,7 +17,14 @@ from core.models import (
     RunResult,
     SystemConfig,
 )
-from core.mutex import MutexInfo, MutexManager, StandardMutexes
+from core.mutex import (
+    DeadlockError,
+    MutexInfo,
+    MutexManager,
+    MutexState,
+    StandardMutexes,
+    WaiterInfo,
+)
 from core.notifications import (
     NotificationConfig,
     NotificationError,
@@ -59,13 +66,31 @@ from core.schedule import (
     get_schedule_manager,
 )
 from core.scheduler import ExecutionDAG, PluginNode, Scheduler, SchedulingError
+from core.streaming import (
+    CompletionEvent,
+    EventType,
+    OutputEvent,
+    Phase,
+    PhaseEvent,
+    StreamEvent,
+    StreamEventQueue,
+    batched_stream,
+    parse_event,
+    parse_progress_line,
+    safe_consume_stream,
+    timeout_stream,
+)
+from core.streaming import ProgressEvent as StreamProgressEvent
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "CompletionEvent",
     "ConfigLoader",
     "ConfigManager",
     "ConnectionError",
+    "DeadlockError",
+    "EventType",
     "ExecutionDAG",
     "ExecutionResult",
     "ExecutionSummary",
@@ -74,12 +99,16 @@ __all__ = [
     "LogLevel",
     "MutexInfo",
     "MutexManager",
+    "MutexState",
     "NotificationConfig",
     "NotificationError",
     "NotificationManager",
     "NotificationUrgency",
     "Orchestrator",
+    "OutputEvent",
     "ParallelOrchestrator",
+    "Phase",
+    "PhaseEvent",
     "PluginConfig",
     "PluginExecutor",
     "PluginMetadata",
@@ -114,12 +143,21 @@ __all__ = [
     "SnapshotManager",
     "SnapshotType",
     "StandardMutexes",
+    "StreamEvent",
+    "StreamEventQueue",
+    "StreamProgressEvent",
     "SystemConfig",
     "UpdatePlugin",
+    "WaiterInfo",
     "YamlConfigLoader",
+    "batched_stream",
     "get_config_dir",
     "get_default_config_path",
     "get_notification_manager",
     "get_schedule_manager",
     "load_notification_config",
+    "parse_event",
+    "parse_progress_line",
+    "safe_consume_stream",
+    "timeout_stream",
 ]

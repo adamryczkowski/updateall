@@ -18,7 +18,7 @@ install-all:
     done
 
 # Run validation across all subprojects
-validate: lint test
+validate: pre-commit lint test
     @echo "All validations passed!"
 
 # Run linters across all subprojects

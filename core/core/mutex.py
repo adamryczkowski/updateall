@@ -2,17 +2,63 @@
 
 This module provides a mutex manager for preventing conflicts between
 plugins that update shared resources.
+
+Phase 1 Enhancements (Risk T4 mitigation):
+- Ordered mutex acquisition to prevent deadlocks
+- asyncio.Condition for efficient waiting instead of polling
+- Deadlock detection with configurable timeout
+- Comprehensive mutex state logging
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+class DeadlockError(Exception):
+    """Raised when a potential deadlock is detected."""
+
+    def __init__(
+        self,
+        plugin: str,
+        mutexes: list[str],
+        conflicts: dict[str, str],
+        wait_time: float,
+    ) -> None:
+        """Initialize the deadlock error.
+
+        Args:
+            plugin: Plugin that detected the deadlock
+            mutexes: Mutexes the plugin was trying to acquire
+            conflicts: Dict of mutex -> holder for conflicting mutexes
+            wait_time: How long the plugin waited before detecting deadlock
+        """
+        self.plugin = plugin
+        self.mutexes = mutexes
+        self.conflicts = conflicts
+        self.wait_time = wait_time
+        super().__init__(
+            f"Potential deadlock detected: {plugin} waiting for {mutexes} "
+            f"held by {conflicts} after {wait_time:.1f}s"
+        )
+
+
+class MutexState(str, Enum):
+    """State of a mutex acquisition attempt."""
+
+    ACQUIRED = "acquired"
+    WAITING = "waiting"
+    TIMEOUT = "timeout"
+    DEADLOCK = "deadlock"
 
 
 @dataclass
@@ -23,12 +69,38 @@ class MutexInfo:
     holder: str
     acquired_at: float = field(default_factory=time.monotonic)
 
+    @property
+    def hold_duration(self) -> float:
+        """Return how long the mutex has been held in seconds."""
+        return time.monotonic() - self.acquired_at
+
+
+@dataclass
+class WaiterInfo:
+    """Information about a plugin waiting for mutexes."""
+
+    plugin: str
+    mutexes: list[str]
+    started_at: float = field(default_factory=time.monotonic)
+
+    @property
+    def wait_duration(self) -> float:
+        """Return how long the plugin has been waiting in seconds."""
+        return time.monotonic() - self.started_at
+
 
 class MutexManager:
     """Manages mutex acquisition and release for plugin coordination.
 
     Mutexes prevent conflicts between plugins that update shared resources.
     For example, apt and dpkg both need exclusive access to the dpkg lock.
+
+    Phase 1 Enhancements:
+    - Ordered acquisition: Mutexes are always acquired in sorted order to
+      prevent deadlocks (Risk T4 mitigation)
+    - Efficient waiting: Uses asyncio.Condition instead of polling
+    - Deadlock detection: Detects potential deadlocks after configurable timeout
+    - Comprehensive logging: Detailed logging of mutex state changes
 
     Mutex naming convention:
     - pkgmgr:apt, pkgmgr:dpkg - Package manager locks
@@ -37,12 +109,34 @@ class MutexManager:
     - system:network, system:disk - System resources
     """
 
-    def __init__(self) -> None:
-        """Initialize the mutex manager."""
+    def __init__(
+        self,
+        deadlock_timeout: float = 60.0,
+        enable_deadlock_detection: bool = True,
+    ) -> None:
+        """Initialize the mutex manager.
+
+        Args:
+            deadlock_timeout: Time in seconds after which to detect potential deadlock.
+            enable_deadlock_detection: Whether to enable deadlock detection.
+        """
         self._held: dict[str, MutexInfo] = {}
         self._lock = asyncio.Lock()
-        self._waiters: dict[str, asyncio.Event] = {}
+        self._condition = asyncio.Condition(self._lock)
+        self._waiters: dict[str, WaiterInfo] = {}
+        self._deadlock_timeout = deadlock_timeout
+        self._enable_deadlock_detection = enable_deadlock_detection
         self._log = logger.bind(component="mutex_manager")
+
+    @property
+    def deadlock_timeout(self) -> float:
+        """Return the deadlock detection timeout in seconds."""
+        return self._deadlock_timeout
+
+    @property
+    def enable_deadlock_detection(self) -> bool:
+        """Return whether deadlock detection is enabled."""
+        return self._enable_deadlock_detection
 
     async def acquire(
         self,
@@ -55,6 +149,8 @@ class MutexManager:
         This method atomically acquires all requested mutexes. If any mutex
         is unavailable, it waits until all can be acquired or timeout occurs.
 
+        Mutexes are acquired in sorted order to prevent deadlocks (Risk T4).
+
         Args:
             plugin: Name of the plugin requesting the mutexes.
             mutexes: List of mutex names to acquire.
@@ -62,46 +158,99 @@ class MutexManager:
 
         Returns:
             True if all mutexes were acquired, False on timeout.
+
+        Raises:
+            DeadlockError: If a potential deadlock is detected.
         """
         if not mutexes:
             return True
 
+        # Sort mutexes to prevent deadlocks (Risk T4 mitigation)
+        sorted_mutexes = sorted(set(mutexes))
+
         deadline = time.monotonic() + timeout
-        log = self._log.bind(plugin=plugin, mutexes=mutexes)
+        log = self._log.bind(plugin=plugin, mutexes=sorted_mutexes)
 
-        log.debug("acquiring_mutexes")
+        log.debug("acquiring_mutexes", original_order=mutexes)
 
-        while True:
-            async with self._lock:
-                # Check if all mutexes are available
-                conflicts = self._get_conflicts(mutexes)
+        # Register as waiter for deadlock detection
+        waiter_info = WaiterInfo(plugin=plugin, mutexes=sorted_mutexes)
+        self._waiters[plugin] = waiter_info
 
-                if not conflicts:
-                    # Acquire all mutexes atomically
-                    now = time.monotonic()
-                    for mutex in mutexes:
-                        self._held[mutex] = MutexInfo(
-                            name=mutex,
-                            holder=plugin,
-                            acquired_at=now,
+        try:
+            async with self._condition:
+                while True:
+                    # Check if all mutexes are available
+                    conflicts = self._get_conflicts(sorted_mutexes)
+
+                    if not conflicts:
+                        # Acquire all mutexes atomically
+                        now = time.monotonic()
+                        for mutex in sorted_mutexes:
+                            self._held[mutex] = MutexInfo(
+                                name=mutex,
+                                holder=plugin,
+                                acquired_at=now,
+                            )
+
+                        log.info(
+                            "mutexes_acquired",
+                            count=len(sorted_mutexes),
+                            state=MutexState.ACQUIRED.value,
                         )
-                    log.debug("mutexes_acquired")
-                    return True
+                        return True
 
-                # Log what we're waiting for
-                log.debug(
-                    "waiting_for_mutexes",
-                    conflicts={m: self._held[m].holder for m in conflicts},
-                )
+                    # Log what we're waiting for
+                    conflict_holders = {m: self._held[m].holder for m in conflicts}
+                    log.debug(
+                        "waiting_for_mutexes",
+                        conflicts=conflict_holders,
+                        state=MutexState.WAITING.value,
+                    )
 
-            # Check timeout
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                log.warning("mutex_acquisition_timeout", conflicts=conflicts)
-                return False
+                    # Check for potential deadlock
+                    if self._enable_deadlock_detection:
+                        wait_duration = waiter_info.wait_duration
+                        # Combine conditions to avoid nested if (SIM102)
+                        if wait_duration > self._deadlock_timeout and self._detect_deadlock(
+                            plugin, sorted_mutexes
+                        ):
+                            log.error(
+                                "deadlock_detected",
+                                conflicts=conflict_holders,
+                                wait_duration=wait_duration,
+                                state=MutexState.DEADLOCK.value,
+                            )
+                            raise DeadlockError(
+                                plugin=plugin,
+                                mutexes=sorted_mutexes,
+                                conflicts=conflict_holders,
+                                wait_time=wait_duration,
+                            )
 
-            # Wait for any held mutex to be released
-            await asyncio.sleep(min(0.1, remaining))
+                    # Calculate remaining time
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        log.warning(
+                            "mutex_acquisition_timeout",
+                            conflicts=conflict_holders,
+                            state=MutexState.TIMEOUT.value,
+                        )
+                        return False
+
+                    # Wait for condition with timeout
+                    # Use min of remaining time and a check interval for deadlock detection
+                    wait_time = min(remaining, self._deadlock_timeout / 2)
+                    # Use contextlib.suppress for expected timeout (SIM105)
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(
+                            self._condition.wait(),
+                            timeout=wait_time,
+                        )
+
+        finally:
+            # Remove from waiters
+            self._waiters.pop(plugin, None)
 
     async def release(self, plugin: str, mutexes: list[str] | None = None) -> None:
         """Release mutexes held by a plugin.
@@ -111,7 +260,7 @@ class MutexManager:
             mutexes: Specific mutexes to release. If None, releases all
                      mutexes held by the plugin.
         """
-        async with self._lock:
+        async with self._condition:
             if mutexes is None:
                 # Release all mutexes held by this plugin
                 to_release = [name for name, info in self._held.items() if info.holder == plugin]
@@ -121,15 +270,24 @@ class MutexManager:
                     m for m in mutexes if m in self._held and self._held[m].holder == plugin
                 ]
 
+            # Calculate hold durations for logging
+            hold_durations = {}
             for mutex in to_release:
+                info = self._held.get(mutex)
+                if info:
+                    hold_durations[mutex] = info.hold_duration
                 del self._held[mutex]
 
             if to_release:
-                self._log.debug(
+                self._log.info(
                     "mutexes_released",
                     plugin=plugin,
                     released=to_release,
+                    hold_durations=hold_durations,
                 )
+
+                # Notify all waiters that mutexes are available
+                self._condition.notify_all()
 
     def get_holder(self, mutex: str) -> str | None:
         """Get the plugin currently holding a mutex.
@@ -173,6 +331,60 @@ class MutexManager:
         """
         return {name: info.holder for name, info in self._held.items()}
 
+    def get_mutex_info(self, mutex: str) -> MutexInfo | None:
+        """Get detailed information about a mutex.
+
+        Args:
+            mutex: Name of the mutex.
+
+        Returns:
+            MutexInfo if held, None otherwise.
+        """
+        return self._held.get(mutex)
+
+    def get_all_mutex_info(self) -> dict[str, MutexInfo]:
+        """Get detailed information about all held mutexes.
+
+        Returns:
+            Dictionary mapping mutex names to MutexInfo.
+        """
+        return dict(self._held)
+
+    def get_waiters(self) -> dict[str, WaiterInfo]:
+        """Get information about all waiting plugins.
+
+        Returns:
+            Dictionary mapping plugin names to WaiterInfo.
+        """
+        return dict(self._waiters)
+
+    def get_state_summary(self) -> dict[str, Any]:
+        """Get a summary of the current mutex state.
+
+        Useful for debugging and monitoring.
+
+        Returns:
+            Dictionary with mutex state information.
+        """
+        return {
+            "held_count": len(self._held),
+            "waiter_count": len(self._waiters),
+            "held_mutexes": {
+                name: {
+                    "holder": info.holder,
+                    "hold_duration": info.hold_duration,
+                }
+                for name, info in self._held.items()
+            },
+            "waiters": {
+                plugin: {
+                    "mutexes": info.mutexes,
+                    "wait_duration": info.wait_duration,
+                }
+                for plugin, info in self._waiters.items()
+            },
+        }
+
     def _get_conflicts(self, mutexes: list[str]) -> list[str]:
         """Get mutexes from the list that are currently held.
 
@@ -183,6 +395,51 @@ class MutexManager:
             List of mutex names that are currently held.
         """
         return [m for m in mutexes if m in self._held]
+
+    def _detect_deadlock(self, plugin: str, mutexes: list[str]) -> bool:
+        """Detect if there's a potential deadlock.
+
+        A deadlock is detected if:
+        1. Plugin A is waiting for mutexes held by Plugin B
+        2. Plugin B is waiting for mutexes held by Plugin A
+
+        This is a simplified cycle detection that only checks direct cycles.
+
+        Args:
+            plugin: The waiting plugin.
+            mutexes: Mutexes the plugin is waiting for.
+
+        Returns:
+            True if a potential deadlock is detected.
+        """
+        # Get holders of the mutexes we're waiting for
+        holders = set()
+        for mutex in mutexes:
+            info = self._held.get(mutex)
+            if info and info.holder != plugin:
+                holders.add(info.holder)
+
+        # Check if any holder is waiting for mutexes we hold
+        our_mutexes = set(self.get_held_by(plugin))
+        if not our_mutexes:
+            return False
+
+        for holder in holders:
+            waiter_info = self._waiters.get(holder)
+            if waiter_info:
+                # Check if the holder is waiting for any of our mutexes
+                waiting_for = set(waiter_info.mutexes)
+                if waiting_for & our_mutexes:
+                    self._log.warning(
+                        "deadlock_cycle_detected",
+                        plugin=plugin,
+                        holder=holder,
+                        our_mutexes=list(our_mutexes),
+                        holder_waiting_for=list(waiting_for),
+                    )
+                    return True
+
+        return False
 
 
 # Standard mutex names for common resources

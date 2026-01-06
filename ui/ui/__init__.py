@@ -10,6 +10,11 @@ Phase 3 - UI Integration adds:
 Phase 1 - Interactive Tabs adds:
 - PTY session management for interactive terminal tabs
 - See docs/interactive-tabs-implementation-plan.md
+
+Phase 2 - Terminal Emulation adds:
+- TerminalScreen: pyte-based terminal emulation with scrollback
+- TerminalView: Textual widget for rendering terminal content
+- See docs/interactive-tabs-implementation-plan.md
 """
 
 from ui.event_handler import (
@@ -47,6 +52,8 @@ from ui.tabbed_run import (
     run_with_tabbed_ui,
 )
 from ui.tables import ResultsTable
+from ui.terminal_screen import StyledChar, TerminalScreen
+from ui.terminal_view import TerminalView, ansi_color_to_rich_color
 
 __all__ = [
     "BatchedEvent",
@@ -64,14 +71,18 @@ __all__ = [
     "ResultsTable",
     "SessionNotFoundError",
     "StreamEventAdapter",
+    "StyledChar",
     "SudoCheckResult",
     "SudoKeepAlive",
     "SudoStatus",
     "SummaryPanel",
     "TabbedRunApp",
+    "TerminalScreen",
+    "TerminalView",
     "TextualBatchedEventHandler",
     "TextualUIEventHandler",
     "UIEventHandler",
+    "ansi_color_to_rich_color",
     "check_sudo_status",
     "ensure_sudo_authenticated",
     "is_pty_available",

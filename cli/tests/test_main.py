@@ -38,8 +38,8 @@ class TestRunCommand:
     """Tests for the run command."""
 
     def test_run_basic(self) -> None:
-        """Test basic run command."""
-        result = runner.invoke(app, ["run"])
+        """Test basic run command with dry-run to avoid sudo prompts."""
+        result = runner.invoke(app, ["run", "--dry-run"])
         # May fail if plugins aren't available, but should at least start
         assert result.exit_code in (0, 1)
 
@@ -49,8 +49,8 @@ class TestRunCommand:
         assert "Dry run mode" in result.stdout or result.exit_code in (0, 1)
 
     def test_run_specific_plugins(self) -> None:
-        """Test run with specific plugins."""
-        result = runner.invoke(app, ["run", "--plugin", "apt", "--plugin", "pipx"])
+        """Test run with specific plugins using dry-run to avoid sudo prompts."""
+        result = runner.invoke(app, ["run", "--plugin", "apt", "--plugin", "pipx", "--dry-run"])
         # Should at least attempt to run the specified plugins
         assert result.exit_code in (0, 1)
 

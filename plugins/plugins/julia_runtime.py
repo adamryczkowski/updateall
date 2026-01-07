@@ -5,6 +5,7 @@ Juliaup is a cross-platform Julia version manager written in Rust.
 
 Official documentation:
 - Juliaup: https://github.com/JuliaLang/juliaup
+- Julia releases: https://julialang.org/downloads/
 
 Note: This plugin should run after the cargo plugin since juliaup is
 distributed via cargo (cargo install juliaup).
@@ -17,7 +18,11 @@ import shutil
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import aiohttp
+
+from core.models import UpdateEstimate
 from core.streaming import CompletionEvent, EventType, OutputEvent
+from core.version import compare_versions
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -29,6 +34,8 @@ if TYPE_CHECKING:
 
 class JuliaRuntimePlugin(BasePlugin):
     """Plugin for updating Julia runtime via juliaup."""
+
+    GITHUB_RELEASES_URL = "https://api.github.com/repos/JuliaLang/julia/releases/latest"
 
     @property
     def name(self) -> str:
@@ -53,8 +60,103 @@ class JuliaRuntimePlugin(BasePlugin):
         """Check if juliaup is available for updates."""
         return self.is_available()
 
-    def get_local_version(self) -> str | None:
+    # =========================================================================
+    # Version Checking Protocol Implementation
+    # =========================================================================
+
+    async def get_installed_version(self) -> str | None:
         """Get the currently installed Julia version.
+
+        Returns:
+            Version string (e.g., "1.10.0") or None if Julia is not installed.
+        """
+        if not shutil.which("julia"):
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "julia",
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                # Output format: "julia version 1.10.0"
+                output = stdout.decode().strip()
+                parts = output.split()
+                if len(parts) >= 3:
+                    return parts[2]  # e.g., "1.10.0"
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the latest available Julia version from GitHub releases.
+
+        Returns:
+            Version string or None if cannot determine.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Accept": "application/vnd.github.v3+json"}
+                async with session.get(
+                    self.GITHUB_RELEASES_URL,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        tag = data.get("tag_name", "")
+                        # Tag format: "v1.10.0"
+                        return tag.lstrip("v")
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Julia needs an update.
+
+        Returns:
+            True if update available, False if up-to-date, None if cannot determine.
+        """
+        installed = await self.get_installed_version()
+        available = await self.get_available_version()
+
+        if installed and available:
+            return compare_versions(installed, available) < 0
+
+        return None
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Get estimated download size for Julia update.
+
+        Julia runtime is typically 100-150MB.
+
+        Returns:
+            UpdateEstimate or None if no update needed.
+        """
+        needs = await self.needs_update()
+        if not needs:
+            return None
+
+        # Julia runtime is typically 100-150MB
+        return UpdateEstimate(
+            download_bytes=120 * 1024 * 1024,  # ~120MB estimate
+            package_count=1,
+            packages=["julia"],
+            estimated_seconds=90,  # 1.5 minutes typical
+            confidence=0.6,  # Medium confidence
+        )
+
+    # =========================================================================
+    # Legacy API (for backward compatibility)
+    # =========================================================================
+
+    def get_local_version(self) -> str | None:
+        """Get the currently installed Julia version (sync version).
+
+        Deprecated: Use get_installed_version() instead.
 
         Returns:
             Version string (e.g., "1.10.0") or None if Julia is not installed.

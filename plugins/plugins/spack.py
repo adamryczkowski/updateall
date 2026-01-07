@@ -14,11 +14,14 @@ Update mechanism:
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.models import UpdateEstimate
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -82,12 +85,168 @@ class SpackPlugin(BasePlugin):
         """Check if Spack is available for updates."""
         return self.is_available()
 
-    def get_local_version(self) -> str | None:
+    async def get_installed_version(self) -> str | None:
         """Get the currently installed Spack version.
+
+        This is the new async API method (Version Checking Protocol).
 
         Returns:
             Version string or None if Spack is not installed.
         """
+        spack_dir = self._find_spack_installation()
+        if spack_dir is None:
+            return None
+
+        spack_bin = spack_dir / "bin" / "spack"
+        if not spack_bin.exists():
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                str(spack_bin),
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                # Output is like "spack 0.21.0" or just "0.21.0"
+                output = stdout.decode().strip()
+                if output.startswith("spack "):
+                    return output[6:]
+                return output
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the available Spack version from the remote repository.
+
+        This is the new async API method (Version Checking Protocol).
+        Uses git fetch to check for available updates.
+
+        Returns:
+            Remote commit hash or None if unable to fetch.
+        """
+        spack_dir = self._find_spack_installation()
+        if spack_dir is None:
+            return None
+
+        try:
+            # Fetch latest from remote
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "fetch",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(spack_dir),
+            )
+            await asyncio.wait_for(process.communicate(), timeout=60)
+
+            # Get remote HEAD commit
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "rev-parse",
+                "--short",
+                "origin/HEAD",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(spack_dir),
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                return stdout.decode().strip()
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Spack needs to be updated.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            True if remote has newer commits than local,
+            False if up-to-date, None if unable to determine.
+        """
+        spack_dir = self._find_spack_installation()
+        if spack_dir is None:
+            return None
+
+        local = await self._get_git_commit_async(spack_dir)
+        remote = await self.get_available_version()
+
+        if not local or not remote:
+            return None
+
+        return local != remote
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Estimate download size and time for Spack update.
+
+        This is the new async API method (Version Checking Protocol).
+        Spack git updates are typically small.
+
+        Returns:
+            UpdateEstimate with download size, or None if no update needed.
+        """
+        if not await self.needs_update():
+            return None
+
+        remote_version = await self.get_available_version()
+        if not remote_version:
+            return None
+
+        # Git updates are typically small (deltas)
+        return UpdateEstimate(
+            download_bytes=10_000_000,  # ~10MB estimate for git objects
+            package_count=1,
+            packages=[f"spack-{remote_version}"],
+            estimated_seconds=60,
+            confidence=0.4,  # Very approximate
+        )
+
+    async def _get_git_commit_async(self, spack_dir: Path) -> str | None:
+        """Get the current git commit hash asynchronously.
+
+        Args:
+            spack_dir: Path to Spack installation.
+
+        Returns:
+            Short commit hash or None on error.
+        """
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "rev-parse",
+                "--short",
+                "HEAD",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(spack_dir),
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                return stdout.decode().strip()
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    # Backward compatibility aliases (deprecated)
+    def get_local_version(self) -> str | None:
+        """Get the currently installed Spack version.
+
+        .. deprecated::
+            Use :meth:`get_installed_version` instead.
+
+        Returns:
+            Version string or None if Spack is not installed.
+        """
+        warnings.warn(
+            "get_local_version() is deprecated, use get_installed_version() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         spack_dir = self._find_spack_installation()
         if spack_dir is None:
             return None
@@ -115,6 +274,9 @@ class SpackPlugin(BasePlugin):
 
     def _get_git_commit(self, spack_dir: Path) -> str | None:
         """Get the current git commit hash.
+
+        .. deprecated::
+            Use :meth:`_get_git_commit_async` instead.
 
         Args:
             spack_dir: Path to Spack installation.
@@ -200,7 +362,8 @@ class SpackPlugin(BasePlugin):
                 continue
 
             output_lines.append(f"Updating Spack in {spack_dir}...")
-            before_commit = self._get_git_commit(spack_dir)
+            # Use new async method
+            before_commit = await self._get_git_commit_async(spack_dir)
 
             # Run git pull
             return_code, stdout, stderr = await self._run_command(
@@ -215,7 +378,8 @@ class SpackPlugin(BasePlugin):
                 continue
 
             output_lines.append(f"  {stdout.strip()}")
-            after_commit = self._get_git_commit(spack_dir)
+            # Use new async method
+            after_commit = await self._get_git_commit_async(spack_dir)
 
             if before_commit and after_commit and before_commit != after_commit:
                 output_lines.append(f"  Updated from {before_commit} to {after_commit}")
@@ -280,7 +444,8 @@ class SpackPlugin(BasePlugin):
                 stream="stdout",
             )
 
-            before_commit = self._get_git_commit(spack_dir)
+            # Use new async method
+            before_commit = await self._get_git_commit_async(spack_dir)
             collected_output: list[str] = []
 
             async for event in self._run_command_streaming(
@@ -293,7 +458,8 @@ class SpackPlugin(BasePlugin):
                     collected_output.append(event.line)
                 yield event
 
-            after_commit = self._get_git_commit(spack_dir)
+            # Use new async method
+            after_commit = await self._get_git_commit_async(spack_dir)
             if before_commit and after_commit and before_commit != after_commit:
                 total_updated += 1
                 yield OutputEvent(

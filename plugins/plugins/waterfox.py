@@ -32,7 +32,7 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.models import DownloadSpec
+from core.models import DownloadSpec, UpdateEstimate
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -101,7 +101,7 @@ class WaterfoxPlugin(BasePlugin):
         """Check if Waterfox is available for updates."""
         return self.is_available()
 
-    def get_local_version(self) -> str | None:
+    async def get_installed_version(self) -> str | None:
         """Get the currently installed Waterfox version.
 
         Returns:
@@ -132,7 +132,7 @@ class WaterfoxPlugin(BasePlugin):
             pass
         return None
 
-    def get_remote_version(self) -> str | None:
+    async def get_available_version(self) -> str | None:
         """Get the latest Waterfox version from GitHub.
 
         Returns:
@@ -145,6 +145,8 @@ class WaterfoxPlugin(BasePlugin):
             )
             with urllib.request.urlopen(request, timeout=30) as response:
                 data = json.loads(response.read().decode())
+                # Cache the response for get_update_estimate
+                self._cached_release_data = data
                 tag_name = str(data.get("tag_name", ""))
                 # Tag format is like "6.0.18-1" or just "6.0.18"
                 pattern = r"^([0-9.]+)"
@@ -159,19 +161,77 @@ class WaterfoxPlugin(BasePlugin):
             pass
         return None
 
-    def needs_update(self) -> bool:
+    async def needs_update(self) -> bool | None:
         """Check if Waterfox needs an update.
 
         Returns:
-            True if an update is available, False otherwise.
+            True if an update is available, False if up-to-date,
+            None if cannot determine.
         """
-        local_version = self.get_local_version()
-        remote_version = self.get_remote_version()
+        local_version = await self.get_installed_version()
+        remote_version = await self.get_available_version()
 
         if not local_version or not remote_version:
-            return False
+            return None
 
-        return local_version != remote_version
+        # Use version comparison from core
+        from core.version import needs_update as version_needs_update
+
+        return version_needs_update(local_version, remote_version)
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Get estimated download size for Waterfox update.
+
+        Returns:
+            UpdateEstimate with download size from GitHub API, or None
+            if no update is needed or size cannot be determined.
+        """
+        # Check if update is needed
+        if not await self.needs_update():
+            return None
+
+        # Try to get size from cached release data
+        release_data = getattr(self, "_cached_release_data", None)
+        if not release_data:
+            # Fetch release data if not cached
+            try:
+                request = urllib.request.Request(
+                    self.GITHUB_API_URL,
+                    headers={"User-Agent": "update-all-plugin"},
+                )
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    release_data = json.loads(response.read().decode())
+            except Exception:
+                return None
+
+        # Find the Linux tarball asset
+        assets = release_data.get("assets", [])
+        for asset in assets:
+            name = asset.get("name", "").lower()
+            if "linux" in name and ("tar.bz2" in name or "tar.gz" in name):
+                size = asset.get("size")
+                if size:
+                    version = await self.get_available_version()
+                    return UpdateEstimate(
+                        download_bytes=size,
+                        package_count=1,
+                        packages=[f"waterfox-{version}"] if version else ["waterfox"],
+                    )
+
+        return None
+
+    # Backward compatibility aliases
+    def get_local_version(self) -> str | None:
+        """Deprecated: Use get_installed_version() instead."""
+        import asyncio
+
+        return asyncio.get_event_loop().run_until_complete(self.get_installed_version())
+
+    def get_remote_version(self) -> str | None:
+        """Deprecated: Use get_available_version() instead."""
+        import asyncio
+
+        return asyncio.get_event_loop().run_until_complete(self.get_available_version())
 
     def _get_download_url(self, version: str) -> str:
         """Get the download URL for a specific version.
@@ -199,11 +259,11 @@ class WaterfoxPlugin(BasePlugin):
             no update is needed.
         """
         # Check if update is needed
-        if not self.needs_update():
+        if not await self.needs_update():
             return None
 
         # Get the remote version
-        remote_version = self.get_remote_version()
+        remote_version = await self.get_available_version()
         if not remote_version:
             return None
 
@@ -285,18 +345,20 @@ class WaterfoxPlugin(BasePlugin):
         if not waterfox_path:
             return "Waterfox not installed, skipping update", None
 
-        local_version = self.get_local_version()
+        local_version = await self.get_installed_version()
         output_lines.append(f"Current Waterfox version: {local_version}")
 
         # Get remote version
-        remote_version = self.get_remote_version()
+        remote_version = await self.get_available_version()
         if not remote_version:
             return "\n".join(output_lines), "Failed to get remote version from GitHub"
 
         output_lines.append(f"Latest Waterfox version: {remote_version}")
 
-        # Check if update is needed
-        if local_version == remote_version:
+        # Check if update is needed using version comparison
+        from core.version import needs_update as version_needs_update
+
+        if not version_needs_update(local_version, remote_version):
             output_lines.append("Waterfox is already up to date")
             return "\n".join(output_lines), None
 

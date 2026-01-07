@@ -8,14 +8,18 @@ Official documentation:
 
 Update mechanism:
 - pihole updatePihole - Updates Pi-hole to the latest version
+- pihole -up - Alternative update command
 """
 
 from __future__ import annotations
 
+import asyncio
+import re
 import shutil
-import subprocess
 from typing import TYPE_CHECKING
 
+from core.models import UpdateEstimate
+from core.version import compare_versions
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -51,12 +55,119 @@ class PiholePlugin(BasePlugin):
         """Check if Pi-hole is available for updates."""
         return self.is_available()
 
-    def get_local_version(self) -> str | None:
+    # =========================================================================
+    # Version Checking Protocol Implementation
+    # =========================================================================
+
+    async def get_installed_version(self) -> str | None:
         """Get the currently installed Pi-hole version.
+
+        Returns:
+            Version string (e.g., "5.17.1") or None if not installed.
+        """
+        if not self.is_available():
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "pihole",
+                "-v",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                output = stdout.decode()
+                # Parse version from output (e.g., "Pi-hole version is v5.17.1")
+                for line in output.split("\n"):
+                    if "pi-hole" in line.lower() and "version" in line.lower():
+                        match = re.search(r"v(\d+\.\d+(?:\.\d+)?)", line)
+                        if match:
+                            return match.group(1)
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the latest available Pi-hole version.
+
+        Returns:
+            Version string or None if cannot determine.
+        """
+        if not self.is_available():
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "pihole",
+                "-v",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                output = stdout.decode()
+                # Parse latest version from output (e.g., "Latest: v5.17.2")
+                for line in output.split("\n"):
+                    if "latest" in line.lower():
+                        match = re.search(
+                            r"latest[:\s]+v?(\d+\.\d+(?:\.\d+)?)", line, re.IGNORECASE
+                        )
+                        if match:
+                            return match.group(1)
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Pi-hole needs an update.
+
+        Returns:
+            True if update available, False if up-to-date, None if cannot determine.
+        """
+        installed = await self.get_installed_version()
+        available = await self.get_available_version()
+
+        if installed and available:
+            return compare_versions(installed, available) < 0
+
+        return None
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Get estimated download size for Pi-hole update.
+
+        Pi-hole updates are typically small (scripts and configs).
+
+        Returns:
+            UpdateEstimate or None if no update needed.
+        """
+        needs = await self.needs_update()
+        if not needs:
+            return None
+
+        # Pi-hole updates are relatively small
+        return UpdateEstimate(
+            download_bytes=50 * 1024 * 1024,  # ~50MB estimate
+            package_count=1,
+            packages=["pihole"],
+            estimated_seconds=60,  # 1 minute typical
+            confidence=0.5,  # Medium confidence
+        )
+
+    # =========================================================================
+    # Legacy API (for backward compatibility)
+    # =========================================================================
+
+    def get_local_version(self) -> str | None:
+        """Get the currently installed Pi-hole version (sync version).
+
+        Deprecated: Use get_installed_version() instead.
 
         Returns:
             Version string or None if Pi-hole is not installed.
         """
+        import subprocess
+
         if not self.is_available():
             return None
 

@@ -8,14 +8,22 @@ Official documentation:
 
 Update mechanism:
 - poetry self update - Updates Poetry to the latest version
+
+Version API:
+- PyPI JSON API: https://pypi.org/pypi/poetry/json
 """
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
+import warnings
 from typing import TYPE_CHECKING
 
+import aiohttp
+
+from core.models import UpdateEstimate
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -27,6 +35,9 @@ if TYPE_CHECKING:
 
 class PoetryPlugin(BasePlugin):
     """Plugin for updating Poetry."""
+
+    # PyPI API URL for Poetry package info
+    PYPI_API_URL = "https://pypi.org/pypi/poetry/json"
 
     @property
     def name(self) -> str:
@@ -51,12 +62,157 @@ class PoetryPlugin(BasePlugin):
         """Check if Poetry is available for updates."""
         return self.is_available()
 
-    def get_local_version(self) -> str | None:
+    async def get_installed_version(self) -> str | None:
         """Get the currently installed Poetry version.
+
+        This is the new async API method (Version Checking Protocol).
 
         Returns:
             Version string or None if Poetry is not installed.
         """
+        if not self.is_available():
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "poetry",
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                # Parse version from output like "Poetry (version 1.8.0)"
+                output = stdout.decode().strip()
+                if "version" in output.lower():
+                    # Extract version number
+                    parts = output.split()
+                    for i, part in enumerate(parts):
+                        if part.lower() == "version" and i + 1 < len(parts):
+                            version = parts[i + 1].rstrip(")").rstrip(")")
+                            return version
+                # Alternative format: "Poetry version 1.8.0"
+                if output.startswith("Poetry"):
+                    parts = output.split()
+                    if len(parts) >= 3:
+                        return parts[-1].rstrip(")")
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the latest Poetry version from PyPI.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            Latest version string or None if unable to fetch.
+        """
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(self.PYPI_API_URL, timeout=aiohttp.ClientTimeout(total=30)) as response,
+            ):
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("info", {}).get("version")
+        except (aiohttp.ClientError, TimeoutError, KeyError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Poetry needs to be updated.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            True if remote version is newer than local version,
+            False if up-to-date, None if unable to determine.
+        """
+        from core.version import needs_update as version_needs_update
+
+        local = await self.get_installed_version()
+        remote = await self.get_available_version()
+
+        if not local or not remote:
+            return None
+
+        return version_needs_update(local, remote)
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Estimate download size and time for Poetry update.
+
+        This is the new async API method (Version Checking Protocol).
+        Poetry is a Python package, so we fetch size from PyPI.
+
+        Returns:
+            UpdateEstimate with download size, or None if no update needed.
+        """
+        if not await self.needs_update():
+            return None
+
+        remote_version = await self.get_available_version()
+        if not remote_version:
+            return None
+
+        # Try to get package size from PyPI
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(self.PYPI_API_URL, timeout=aiohttp.ClientTimeout(total=30)) as response,
+            ):
+                if response.status == 200:
+                    data = await response.json()
+                    # Get the wheel or sdist size
+                    urls = data.get("urls", [])
+                    total_size = 0
+                    for url_info in urls:
+                        if url_info.get("packagetype") == "bdist_wheel":
+                            total_size = url_info.get("size", 0)
+                            break
+                    if total_size == 0:
+                        for url_info in urls:
+                            if url_info.get("packagetype") == "sdist":
+                                total_size = url_info.get("size", 0)
+                                break
+
+                    if total_size > 0:
+                        # Poetry self-update downloads and installs
+                        estimated_seconds = max(30, int(total_size / 500_000))  # ~500KB/s
+                        return UpdateEstimate(
+                            download_bytes=total_size,
+                            package_count=1,
+                            packages=[f"poetry-{remote_version}"],
+                            estimated_seconds=estimated_seconds,
+                            confidence=0.7,
+                        )
+        except (aiohttp.ClientError, TimeoutError, KeyError):
+            pass
+
+        # Return estimate without download size if API request fails
+        return UpdateEstimate(
+            download_bytes=None,
+            package_count=1,
+            packages=[f"poetry-{remote_version}"],
+            estimated_seconds=60,  # Conservative estimate
+            confidence=0.3,
+        )
+
+    # Backward compatibility alias (deprecated)
+    def get_local_version(self) -> str | None:
+        """Get the currently installed Poetry version.
+
+        .. deprecated::
+            Use :meth:`get_installed_version` instead.
+
+        Returns:
+            Version string or None if Poetry is not installed.
+        """
+        warnings.warn(
+            "get_local_version() is deprecated, use get_installed_version() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not self.is_available():
             return None
 
@@ -142,7 +298,8 @@ class PoetryPlugin(BasePlugin):
         if not self.is_available():
             return "Poetry not installed, skipping update", None
 
-        local_version = self.get_local_version()
+        # Get version using new async API
+        local_version = await self.get_installed_version()
         output_lines.append(f"Current Poetry version: {local_version}")
         output_lines.append("Updating Poetry...")
 
@@ -194,7 +351,8 @@ class PoetryPlugin(BasePlugin):
             )
             return
 
-        local_version = self.get_local_version()
+        # Get version using new async API
+        local_version = await self.get_installed_version()
         yield OutputEvent(
             event_type=EventType.OUTPUT,
             plugin_name=self.name,

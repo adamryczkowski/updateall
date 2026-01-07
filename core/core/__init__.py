@@ -28,6 +28,8 @@ from core.models import (
     RunResult,
     SystemConfig,
     UpdateCommand,
+    UpdateEstimate,
+    VersionInfo,
 )
 from core.mutex import (
     DeadlockError,
@@ -93,6 +95,15 @@ from core.streaming import (
     timeout_stream,
 )
 from core.streaming import ProgressEvent as StreamProgressEvent
+from core.version import (
+    Version,
+    VersionComponents,
+    compare_versions,
+    is_git_hash,
+    needs_update,
+    normalize_version,
+    parse_version,
+)
 
 __version__ = "0.3.0"
 
@@ -167,18 +178,27 @@ __all__ = [
     "StreamProgressEvent",
     "SystemConfig",
     "UpdateCommand",
+    "UpdateEstimate",
     "UpdatePlugin",
+    "Version",
+    "VersionComponents",
+    "VersionInfo",
     "WaiterInfo",
     "YamlConfigLoader",
     "batched_stream",
+    "compare_versions",
     "get_config_dir",
     "get_default_config_path",
     "get_metrics_collector",
     "get_notification_manager",
     "get_schedule_manager",
+    "is_git_hash",
     "load_notification_config",
+    "needs_update",
+    "normalize_version",
     "parse_event",
     "parse_progress_line",
+    "parse_version",
     "safe_consume_stream",
     "set_metrics_collector",
     "timeout_stream",

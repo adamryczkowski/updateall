@@ -8,6 +8,10 @@ This plugin uses the Centralized Download Manager API (Proposal 2) for:
 
 Note: Calibre uses a shell installer script that downloads the actual binary.
 The DownloadManager is used to download the installer script with retry logic.
+
+Version API:
+- Calibre download page: https://calibre-ebook.com/download_linux
+- Version can be extracted from the download page
 """
 
 from __future__ import annotations
@@ -18,7 +22,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.models import DownloadSpec
+import aiohttp
+
+from core.models import DownloadSpec, UpdateEstimate
 from core.streaming import (
     CompletionEvent,
     EventType,
@@ -83,6 +89,101 @@ class CalibrePlugin(BasePlugin):
 
     # Installer script URL
     INSTALLER_URL = "https://download.calibre-ebook.com/linux-installer.sh"
+    # Version check URL (download page contains version info)
+    VERSION_URL = "https://calibre-ebook.com/download_linux"
+    # Approximate download size for Calibre binary (~180MB for Linux x64)
+    APPROX_DOWNLOAD_SIZE = 180_000_000
+
+    async def get_installed_version(self) -> str | None:
+        """Get the currently installed Calibre version.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            Version string or None if not installed.
+        """
+        return_code, stdout, _ = await self._run_command(
+            ["calibre", "--version"],
+            timeout=30,
+            sudo=False,
+        )
+
+        if return_code != 0:
+            return None
+
+        # Parse version from output like "calibre (calibre 8.16.2)"
+        match = re.search(r"calibre[^\d]*(\d+\.\d+(?:\.\d+)?)", stdout)
+        if match:
+            return match.group(1)
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the latest Calibre version from the download page.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            Latest version string or None if unable to fetch.
+        """
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(self.VERSION_URL, timeout=aiohttp.ClientTimeout(total=30)) as response,
+            ):
+                if response.status == 200:
+                    html = await response.text()
+                    # Look for version in the download page (e.g., calibre-X.Y.Z)
+                    match = re.search(r"calibre[- ](\d+\.\d+(?:\.\d+)?)", html, re.IGNORECASE)
+                    if match:
+                        return match.group(1)
+        except (aiohttp.ClientError, TimeoutError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Calibre needs to be updated.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            True if remote version is newer than local version,
+            False if up-to-date, None if unable to determine.
+        """
+        from core.version import needs_update as version_needs_update
+
+        local = await self.get_installed_version()
+        remote = await self.get_available_version()
+
+        if not local or not remote:
+            return None
+
+        return version_needs_update(local, remote)
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Estimate download size and time for Calibre update.
+
+        This is the new async API method (Version Checking Protocol).
+        Calibre binary is approximately 180MB.
+
+        Returns:
+            UpdateEstimate with download size, or None if no update needed.
+        """
+        if not await self.needs_update():
+            return None
+
+        remote_version = await self.get_available_version()
+        if not remote_version:
+            return None
+
+        # Calibre binary is approximately 180MB
+        # Estimate ~3 minutes for download + installation
+        return UpdateEstimate(
+            download_bytes=self.APPROX_DOWNLOAD_SIZE,
+            package_count=1,
+            packages=[f"calibre-{remote_version}"],
+            estimated_seconds=180,  # 3 minutes
+            confidence=0.6,  # Approximate size
+        )
 
     async def get_download_spec(self) -> DownloadSpec | None:
         """Get the download specification for Calibre installer.
@@ -126,27 +227,6 @@ class CalibrePlugin(BasePlugin):
             "wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin",
         ]
 
-    async def _get_current_version(self) -> str | None:
-        """Get the currently installed Calibre version.
-
-        Returns:
-            Version string or None if not installed.
-        """
-        return_code, stdout, _ = await self._run_command(
-            ["calibre", "--version"],
-            timeout=30,
-            sudo=False,
-        )
-
-        if return_code != 0:
-            return None
-
-        # Parse version from output like "calibre (calibre 8.16.2)"
-        match = re.search(r"calibre[^\d]*(\d+\.\d+(?:\.\d+)?)", stdout)
-        if match:
-            return match.group(1)
-        return None
-
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
         """Execute Calibre update using the official installer.
 
@@ -158,8 +238,8 @@ class CalibrePlugin(BasePlugin):
         """
         output_parts: list[str] = []
 
-        # First, get current version
-        current_version = await self._get_current_version()
+        # First, get current version (using new async API)
+        current_version = await self.get_installed_version()
         if current_version:
             output_parts.append(f"Current Calibre version: {current_version}")
         else:
@@ -201,8 +281,8 @@ class CalibrePlugin(BasePlugin):
         if return_code != 0:
             return "\n".join(output_parts), f"Calibre installer failed: {stderr}"
 
-        # Get new version
-        new_version = await self._get_current_version()
+        # Get new version (using new async API)
+        new_version = await self.get_installed_version()
         if new_version:
             output_parts.append(f"\nNew Calibre version: {new_version}")
             if current_version and current_version != new_version:
@@ -246,8 +326,8 @@ class CalibrePlugin(BasePlugin):
         config = PluginConfig(name=self.name)
         collected_output: list[str] = []
 
-        # Get current version first
-        current_version = await self._get_current_version()
+        # Get current version first (using new async API)
+        current_version = await self.get_installed_version()
         version_msg = (
             f"Current Calibre version: {current_version}"
             if current_version
@@ -330,8 +410,8 @@ class CalibrePlugin(BasePlugin):
                 collected_output.append(event.line)
 
             if isinstance(event, CompletionEvent):
-                # Get new version
-                new_version = await self._get_current_version()
+                # Get new version (using new async API)
+                new_version = await self.get_installed_version()
                 packages_updated = 0
 
                 if new_version:

@@ -16,6 +16,7 @@ import shutil
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from core.models import UpdateEstimate
 from core.streaming import CompletionEvent, EventType, OutputEvent
 from plugins.base import BasePlugin
 
@@ -52,8 +53,132 @@ class JuliaPackagesPlugin(BasePlugin):
         """Check if Julia is available for package updates."""
         return self.is_available()
 
-    def get_local_version(self) -> str | None:
+    # =========================================================================
+    # Version Checking Protocol Implementation
+    # =========================================================================
+
+    async def get_installed_version(self) -> str | None:
         """Get the currently installed Julia version.
+
+        Returns:
+            Version string (e.g., "1.10.0") or None if Julia is not installed.
+        """
+        if not self.is_available():
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "julia",
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                # Output format: "julia version 1.10.0"
+                output = stdout.decode().strip()
+                parts = output.split()
+                if len(parts) >= 3:
+                    return parts[2]  # e.g., "1.10.0"
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get package update status.
+
+        For Julia packages, we check if any packages need updates.
+        Returns a summary string rather than a version.
+
+        Returns:
+            String indicating update status or None.
+        """
+        if not self.is_available():
+            return None
+
+        try:
+            # Check for outdated packages
+            check_script = "using Pkg; outdated = Pkg.outdated(); println(length(outdated))"
+            process = await asyncio.create_subprocess_exec(
+                "julia",
+                "-e",
+                check_script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=60)
+            if process.returncode == 0:
+                output = stdout.decode().strip()
+                # Try to parse the number of outdated packages
+                try:
+                    count = int(output.split()[-1])
+                    return f"{count} packages outdated"
+                except (ValueError, IndexError):
+                    pass
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Julia packages need updates.
+
+        Returns:
+            True if updates available, False if up-to-date, None if cannot determine.
+        """
+        if not self.is_available():
+            return None
+
+        try:
+            # Check for outdated packages using Pkg.status()
+            check_script = 'using Pkg; st = Pkg.status(outdated=true); println("done")'
+            process = await asyncio.create_subprocess_exec(
+                "julia",
+                "-e",
+                check_script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=60)
+            if process.returncode == 0:
+                output = stdout.decode()
+                # If there are outdated packages, the output will contain version arrows
+                if "↑" in output or "⇒" in output:
+                    return True
+                # If just "done" or minimal output, no updates
+                if "no changes" in output.lower() or output.strip() == "done":
+                    return False
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Get estimated download size for Julia package updates.
+
+        Returns:
+            UpdateEstimate or None if no update needed.
+        """
+        needs = await self.needs_update()
+        if not needs:
+            return None
+
+        # Julia packages vary widely in size
+        # Estimate based on typical package update
+        return UpdateEstimate(
+            download_bytes=50 * 1024 * 1024,  # ~50MB estimate
+            package_count=None,  # Unknown without parsing
+            packages=None,
+            estimated_seconds=120,  # 2 minutes typical
+            confidence=0.4,  # Low confidence - varies widely
+        )
+
+    # =========================================================================
+    # Legacy API (for backward compatibility)
+    # =========================================================================
+
+    def get_local_version(self) -> str | None:
+        """Get the currently installed Julia version (sync version).
+
+        Deprecated: Use get_installed_version() instead.
 
         Returns:
             Version string (e.g., "1.10.0") or None if Julia is not installed.

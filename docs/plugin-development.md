@@ -10,6 +10,7 @@ This guide explains how to create plugins for Update-All. Plugins extend Update-
 - [API Reference](#api-reference)
   - [Declarative Command Execution API](#declarative-command-execution-api) *(Recommended)*
   - [Centralized Download Manager API](#centralized-download-manager-api) *(Recommended)*
+  - [Version Checking Protocol](#version-checking-protocol) *(Recommended)*
 - [Advanced Topics](#advanced-topics)
   - [Plugins Requiring Sudo](#plugins-requiring-sudo)
   - [Multi-Step Updates](#multi-step-updates)
@@ -927,6 +928,364 @@ global:
 #### Fallback to Manual Downloads
 
 If `get_download_spec()` returns `None` (the default), the base class falls back to the manual `download_streaming()` implementation. This ensures backward compatibility with existing plugins.
+
+### Version Checking Protocol
+
+The **Version Checking Protocol** is the recommended way to implement version checking and update estimation in plugins. This enables:
+- Check-only mode (see what needs updating without applying)
+- Download size estimation before updates
+- Skip plugins that are already up-to-date
+- Better progress estimation based on download sizes
+
+#### Why Use the Version Checking Protocol?
+
+1. **Skip unnecessary updates** — Don't run update commands if already up-to-date
+2. **Accurate time estimates** — Know download sizes before starting
+3. **Check-only mode** — Users can see what would be updated
+4. **Better UX** — Show version info in progress display
+5. **Resource planning** — Estimate disk space and bandwidth needs
+
+#### Core Methods
+
+The Version Checking Protocol adds four async methods to plugins:
+
+##### `get_installed_version() -> str | None`
+
+Returns the currently installed version, or `None` if not installed.
+
+```python
+async def get_installed_version(self) -> str | None:
+    """Get the currently installed version.
+
+    Returns:
+        Version string (e.g., "1.75.0") or None if not installed.
+    """
+    if not self.is_available():
+        return None
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "myapp",
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+        if process.returncode == 0:
+            # Parse version from output like "myapp version 1.2.3"
+            output = stdout.decode().strip()
+            match = re.search(r"(\d+\.\d+\.\d+)", output)
+            if match:
+                return match.group(1)
+    except (TimeoutError, OSError):
+        pass
+    return None
+```
+
+##### `get_available_version() -> str | None`
+
+Returns the latest available version, or `None` if cannot determine.
+
+```python
+async def get_available_version(self) -> str | None:
+    """Get the latest available version.
+
+    Returns:
+        Version string or None if cannot determine.
+    """
+    try:
+        # Example: Check GitHub releases API
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.github.com/repos/owner/repo/releases/latest",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    tag = data.get("tag_name", "")
+                    return tag.lstrip("v")  # Remove "v" prefix
+    except (TimeoutError, aiohttp.ClientError, OSError):
+        pass
+    return None
+```
+
+##### `needs_update() -> bool | None`
+
+Returns whether an update is needed, or `None` if cannot determine.
+
+```python
+async def needs_update(self) -> bool | None:
+    """Check if an update is needed.
+
+    Returns:
+        True if update available, False if up-to-date, None if cannot determine.
+    """
+    installed = await self.get_installed_version()
+    available = await self.get_available_version()
+
+    if installed and available:
+        # Use the version comparison utility
+        from core.version import compare_versions
+        return compare_versions(installed, available) < 0
+
+    return None
+```
+
+##### `get_update_estimate() -> UpdateEstimate | None`
+
+Returns download size and time estimates, or `None` if no update needed.
+
+```python
+from core.models import UpdateEstimate
+
+async def get_update_estimate(self) -> UpdateEstimate | None:
+    """Get estimated download size and time.
+
+    Returns:
+        UpdateEstimate or None if no update needed.
+    """
+    needs = await self.needs_update()
+    if not needs:
+        return None
+
+    # Try to get actual size from API
+    download_bytes = 50 * 1024 * 1024  # Default 50MB
+
+    try:
+        # Example: Get size from PyPI API
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://pypi.org/pypi/mypackage/json",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for url_info in data.get("urls", []):
+                        if url_info.get("packagetype") == "bdist_wheel":
+                            download_bytes = url_info.get("size", download_bytes)
+                            break
+    except (TimeoutError, aiohttp.ClientError, OSError):
+        pass
+
+    return UpdateEstimate(
+        download_bytes=download_bytes,
+        package_count=1,
+        packages=["mypackage"],
+        estimated_seconds=30,
+        confidence=0.8,  # High confidence from API
+    )
+```
+
+#### UpdateEstimate Dataclass
+
+The `UpdateEstimate` dataclass describes the expected update:
+
+```python
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class UpdateEstimate:
+    # Size information
+    download_bytes: int | None = None      # Total bytes to download
+    package_count: int | None = None       # Number of packages
+
+    # Package details (optional)
+    packages: list[str] | None = None      # List of package names
+
+    # Time estimation
+    estimated_seconds: float | None = None # Estimated time to complete
+
+    # Confidence level (0.0 to 1.0)
+    confidence: float = 0.5                # How confident is this estimate
+```
+
+#### VersionInfo Dataclass
+
+The `VersionInfo` dataclass aggregates all version information:
+
+```python
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class VersionInfo:
+    installed: str | None = None           # Installed version
+    available: str | None = None           # Available version
+    needs_update: bool | None = None       # Whether update is needed
+    check_time: datetime | None = None     # When the check was performed
+    error_message: str | None = None       # Error if check failed
+    estimate: UpdateEstimate | None = None # Download size estimate
+```
+
+#### Version Comparison Utilities
+
+The `core.version` module provides utilities for version comparison:
+
+```python
+from core.version import compare_versions, parse_version, needs_update
+
+# Compare two versions
+result = compare_versions("1.2.3", "1.3.0")  # Returns -1 (less than)
+result = compare_versions("2.0.0", "1.9.9")  # Returns 1 (greater than)
+result = compare_versions("1.0.0", "1.0.0")  # Returns 0 (equal)
+
+# Check if update is needed
+needs = needs_update("1.2.3", "1.3.0")  # Returns True
+needs = needs_update("2.0.0", "1.9.9")  # Returns False
+
+# Parse version for detailed comparison
+version = parse_version("1.2.3-beta.1")
+print(version.major, version.minor, version.patch)  # 1, 2, 3
+```
+
+#### Real-World Example: Waterfox Plugin
+
+Here's how the Waterfox plugin implements the Version Checking Protocol:
+
+```python
+"""Waterfox update plugin with Version Checking Protocol."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+
+import aiohttp
+
+from core.models import UpdateEstimate
+from core.version import compare_versions
+from plugins.base import BasePlugin
+
+
+class WaterfoxPlugin(BasePlugin):
+    """Plugin for updating Waterfox browser."""
+
+    GITHUB_API_URL = "https://api.github.com/repos/MrAlex94/Waterfox/releases/latest"
+
+    @property
+    def name(self) -> str:
+        return "waterfox"
+
+    @property
+    def command(self) -> str:
+        return "waterfox"
+
+    async def get_installed_version(self) -> str | None:
+        """Get installed Waterfox version."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "waterfox",
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                output = stdout.decode()
+                match = re.search(r"(\d+\.\d+\.\d+)", output)
+                if match:
+                    return match.group(1)
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get latest Waterfox version from GitHub."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Accept": "application/vnd.github.v3+json"}
+                async with session.get(
+                    self.GITHUB_API_URL,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        tag = data.get("tag_name", "")
+                        return tag.lstrip("G")  # Remove "G" prefix
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Waterfox needs an update."""
+        installed = await self.get_installed_version()
+        available = await self.get_available_version()
+
+        if installed and available:
+            return compare_versions(installed, available) < 0
+
+        return None
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Get download size estimate for Waterfox."""
+        needs = await self.needs_update()
+        if not needs:
+            return None
+
+        # Try to get actual size from GitHub release
+        download_bytes = 100 * 1024 * 1024  # Default 100MB
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Accept": "application/vnd.github.v3+json"}
+                async with session.get(
+                    self.GITHUB_API_URL,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for asset in data.get("assets", []):
+                            if "linux" in asset.get("name", "").lower():
+                                download_bytes = asset.get("size", download_bytes)
+                                break
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            pass
+
+        return UpdateEstimate(
+            download_bytes=download_bytes,
+            package_count=1,
+            packages=["waterfox"],
+            estimated_seconds=120,
+            confidence=0.8,
+        )
+```
+
+#### Version Sources by Plugin Type
+
+Different plugins use different sources for version information:
+
+| Plugin Type | Installed Version | Available Version |
+|-------------|-------------------|-------------------|
+| System packages (apt, snap) | Package manager query | Package manager query |
+| GitHub releases | `--version` flag | GitHub API |
+| PyPI packages | `--version` flag | PyPI JSON API |
+| Language runtimes | `--version` flag | Official download page |
+| Self-updating tools | `--version` flag | Built-in check command |
+
+#### Confidence Levels
+
+The `confidence` field indicates how reliable the estimate is:
+
+| Confidence | Meaning | Example |
+|------------|---------|---------|
+| 0.9 - 1.0 | Very high | Exact size from API |
+| 0.7 - 0.9 | High | Size from package metadata |
+| 0.5 - 0.7 | Medium | Estimate from similar packages |
+| 0.3 - 0.5 | Low | Rough estimate |
+| 0.0 - 0.3 | Very low | Wild guess |
+
+#### Fallback Behavior
+
+If a plugin doesn't implement the Version Checking Protocol methods, the base class provides sensible defaults:
+
+- `get_installed_version()` → Returns `None`
+- `get_available_version()` → Returns `None`
+- `needs_update()` → Returns `None` (always run update)
+- `get_update_estimate()` → Returns `None` (no size estimate)
+
+This ensures backward compatibility with existing plugins.
 
 ## Advanced Topics
 

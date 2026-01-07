@@ -1,7 +1,7 @@
 """Tests for core models."""
 
 from dataclasses import FrozenInstanceError
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,8 @@ from core.models import (
     PluginMetadata,
     PluginStatus,
     UpdateCommand,
+    UpdateEstimate,
+    VersionInfo,
 )
 from core.streaming import Phase
 
@@ -713,3 +715,192 @@ class TestGlobalConfigDownloadSettings:
         assert config.download_bandwidth_limit == 1_000_000
         assert config.download_max_concurrent == 4
         assert config.download_timeout_seconds == 7200
+
+
+# =============================================================================
+# Version Checking Protocol Tests (Proposal 3)
+# =============================================================================
+
+
+class TestUpdateEstimate:
+    """Tests for UpdateEstimate dataclass."""
+
+    def test_update_estimate_creation(self) -> None:
+        """UE-001: Create UpdateEstimate with all fields."""
+        estimate = UpdateEstimate(
+            download_bytes=157286400,
+            package_count=15,
+            packages=["pkg1", "pkg2"],
+            estimated_seconds=120.5,
+            confidence=0.85,
+        )
+
+        assert estimate.download_bytes == 157286400
+        assert estimate.package_count == 15
+        assert estimate.packages == ["pkg1", "pkg2"]
+        assert estimate.estimated_seconds == 120.5
+        assert estimate.confidence == 0.85
+
+    def test_update_estimate_defaults(self) -> None:
+        """UE-002: UpdateEstimate default values."""
+        estimate = UpdateEstimate()
+
+        assert estimate.download_bytes is None
+        assert estimate.package_count is None
+        assert estimate.packages is None
+        assert estimate.estimated_seconds is None
+        assert estimate.confidence is None
+
+    def test_has_download_info_true(self) -> None:
+        """UE-003: has_download_info when download_bytes is set."""
+        estimate = UpdateEstimate(download_bytes=1024)
+        assert estimate.has_download_info is True
+
+    def test_has_download_info_false(self) -> None:
+        """UE-004: has_download_info when download_bytes is None."""
+        estimate = UpdateEstimate()
+        assert estimate.has_download_info is False
+
+    def test_format_download_size_bytes(self) -> None:
+        """UE-005: Format small sizes in bytes."""
+        estimate = UpdateEstimate(download_bytes=512)
+        assert estimate.format_download_size() == "512 B"
+
+    def test_format_download_size_kilobytes(self) -> None:
+        """UE-006: Format sizes in kilobytes."""
+        estimate = UpdateEstimate(download_bytes=2048)
+        assert estimate.format_download_size() == "2.0 KB"
+
+    def test_format_download_size_megabytes(self) -> None:
+        """UE-007: Format sizes in megabytes."""
+        estimate = UpdateEstimate(download_bytes=157286400)
+        assert estimate.format_download_size() == "150.0 MB"
+
+    def test_format_download_size_gigabytes(self) -> None:
+        """UE-008: Format sizes in gigabytes."""
+        estimate = UpdateEstimate(download_bytes=2147483648)
+        assert estimate.format_download_size() == "2.00 GB"
+
+    def test_format_download_size_unknown(self) -> None:
+        """UE-009: Format when download_bytes is None."""
+        estimate = UpdateEstimate()
+        assert estimate.format_download_size() == "Unknown"
+
+    def test_update_estimate_frozen(self) -> None:
+        """UE-010: UpdateEstimate is immutable."""
+        estimate = UpdateEstimate(download_bytes=1024)
+        with pytest.raises(FrozenInstanceError):
+            estimate.download_bytes = 2048  # type: ignore
+
+
+class TestVersionInfo:
+    """Tests for VersionInfo dataclass."""
+
+    def test_version_info_creation(self) -> None:
+        """VI-001: Create VersionInfo with all fields."""
+        info = VersionInfo(
+            installed="1.2.3",
+            available="1.3.0",
+            needs_update=True,
+        )
+
+        assert info.installed == "1.2.3"
+        assert info.available == "1.3.0"
+        assert info.needs_update is True
+
+    def test_version_info_defaults(self) -> None:
+        """VI-002: VersionInfo default values."""
+        info = VersionInfo()
+
+        assert info.installed is None
+        assert info.available is None
+        assert info.needs_update is None
+        assert info.check_time is None
+        assert info.error_message is None
+        assert info.estimate is None
+
+    def test_is_up_to_date_true(self) -> None:
+        """VI-003: is_up_to_date when no update needed."""
+        info = VersionInfo(needs_update=False)
+        assert info.is_up_to_date is True
+
+    def test_is_up_to_date_false(self) -> None:
+        """VI-004: is_up_to_date when update needed."""
+        info = VersionInfo(needs_update=True)
+        assert info.is_up_to_date is False
+
+    def test_is_up_to_date_none(self) -> None:
+        """VI-005: is_up_to_date when cannot determine."""
+        info = VersionInfo(needs_update=None)
+        assert info.is_up_to_date is None
+
+    def test_version_change_string(self) -> None:
+        """VI-006: version_change property."""
+        info = VersionInfo(
+            installed="1.2.3",
+            available="1.3.0",
+            needs_update=True,
+        )
+        assert info.version_change == "1.2.3 -> 1.3.0"
+
+    def test_version_change_none_when_up_to_date(self) -> None:
+        """VI-007: version_change is None when up-to-date."""
+        info = VersionInfo(
+            installed="1.3.0",
+            available="1.3.0",
+            needs_update=False,
+        )
+        assert info.version_change is None
+
+    def test_version_change_none_when_missing_versions(self) -> None:
+        """VI-008: version_change is None when versions missing."""
+        info = VersionInfo(needs_update=True)
+        assert info.version_change is None
+
+    def test_version_info_with_estimate(self) -> None:
+        """VI-009: VersionInfo with UpdateEstimate."""
+        estimate = UpdateEstimate(download_bytes=157286400, package_count=15)
+        info = VersionInfo(
+            installed="1.2.3",
+            available="1.3.0",
+            needs_update=True,
+            estimate=estimate,
+        )
+
+        assert info.estimate is not None
+        assert info.download_size == "150.0 MB"
+
+    def test_download_size_none_without_estimate(self) -> None:
+        """VI-010: download_size is None when no estimate."""
+        info = VersionInfo(needs_update=True)
+        assert info.download_size is None
+
+    def test_version_info_with_check_time(self) -> None:
+        """VI-011: VersionInfo with check_time."""
+        check_time = datetime.now(tz=UTC)
+        info = VersionInfo(
+            installed="1.2.3",
+            available="1.3.0",
+            needs_update=True,
+            check_time=check_time,
+        )
+
+        assert info.check_time == check_time
+
+    def test_version_info_with_error(self) -> None:
+        """VI-012: VersionInfo with error message."""
+        info = VersionInfo(
+            error_message="Network error",
+            check_time=datetime.now(tz=UTC),
+        )
+
+        assert info.error_message == "Network error"
+        assert info.installed is None
+        assert info.available is None
+        assert info.needs_update is None
+
+    def test_version_info_frozen(self) -> None:
+        """VI-013: VersionInfo is immutable."""
+        info = VersionInfo(installed="1.2.3")
+        with pytest.raises(FrozenInstanceError):
+            info.installed = "1.3.0"  # type: ignore

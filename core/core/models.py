@@ -482,3 +482,141 @@ class UpdateCommand:
         """Validate the command after initialization."""
         if not self.cmd:
             raise ValueError("cmd must be a non-empty list")
+
+
+# =============================================================================
+# Version Checking Protocol (Proposal 3)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class UpdateEstimate:
+    """Estimated resource requirements for an update.
+
+    This dataclass provides information about the expected download size,
+    package count, and estimated time for an update. This enables:
+    - Showing users how much bandwidth an update will require
+    - Estimating total update time across all plugins
+    - Making informed decisions about when to run updates
+
+    Attributes:
+        download_bytes: Total download size in bytes (None if unknown).
+        package_count: Number of packages to update (None if unknown).
+        packages: List of package names to update (None if unknown).
+        estimated_seconds: Estimated time to complete in seconds.
+        confidence: Confidence level of the estimate (0.0 - 1.0).
+
+    Example:
+        >>> estimate = UpdateEstimate(
+        ...     download_bytes=157286400,
+        ...     package_count=15,
+        ...     packages=["pkg1", "pkg2"],
+        ... )
+        >>> estimate.format_download_size()
+        '150.0 MB'
+    """
+
+    # Download information
+    download_bytes: int | None = None
+
+    # Package information
+    package_count: int | None = None
+    packages: list[str] | None = None
+
+    # Time estimates (based on historical data or heuristics)
+    estimated_seconds: float | None = None
+
+    # Confidence level (0.0 - 1.0)
+    confidence: float | None = None
+
+    @property
+    def has_download_info(self) -> bool:
+        """Check if download size information is available."""
+        return self.download_bytes is not None
+
+    def format_download_size(self) -> str:
+        """Format download size in human-readable format.
+
+        Returns:
+            Human-readable size string (e.g., "150.0 MB") or "Unknown".
+        """
+        if self.download_bytes is None:
+            return "Unknown"
+        if self.download_bytes < 1024:
+            return f"{self.download_bytes} B"
+        elif self.download_bytes < 1024 * 1024:
+            return f"{self.download_bytes / 1024:.1f} KB"
+        elif self.download_bytes < 1024 * 1024 * 1024:
+            return f"{self.download_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{self.download_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+@dataclass(frozen=True)
+class VersionInfo:
+    """Version information for a plugin.
+
+    This dataclass aggregates version checking results into a single
+    object for easy consumption by the UI and orchestrator.
+
+    Attributes:
+        installed: Currently installed version string (None if unknown).
+        available: Latest available version string (None if unknown).
+        needs_update: Whether an update is needed (None if cannot determine).
+        check_time: Timestamp when the version check was performed.
+        error_message: Error message if version check failed.
+        estimate: Update estimate with download size info (optional).
+
+    Example:
+        >>> from datetime import datetime, UTC
+        >>> info = VersionInfo(
+        ...     installed="1.2.3",
+        ...     available="1.3.0",
+        ...     needs_update=True,
+        ...     check_time=datetime.now(tz=UTC),
+        ... )
+        >>> info.version_change
+        '1.2.3 -> 1.3.0'
+    """
+
+    installed: str | None = None
+    available: str | None = None
+    needs_update: bool | None = None
+    check_time: datetime | None = None
+    error_message: str | None = None
+
+    # Update estimate (optional, for plugins that support it)
+    estimate: UpdateEstimate | None = None
+
+    @property
+    def is_up_to_date(self) -> bool | None:
+        """Check if the software is up-to-date.
+
+        Returns:
+            True if up-to-date, False if update needed, None if unknown.
+        """
+        if self.needs_update is None:
+            return None
+        return not self.needs_update
+
+    @property
+    def version_change(self) -> str | None:
+        """Get version change string (e.g., '1.2.3 -> 1.3.0').
+
+        Returns:
+            Version change string or None if not applicable.
+        """
+        if self.installed and self.available and self.needs_update:
+            return f"{self.installed} -> {self.available}"
+        return None
+
+    @property
+    def download_size(self) -> str | None:
+        """Get formatted download size if available.
+
+        Returns:
+            Formatted download size or None if not available.
+        """
+        if self.estimate and self.estimate.has_download_info:
+            return self.estimate.format_download_size()
+        return None

@@ -23,11 +23,14 @@ import platform
 import shutil
 import tempfile
 import urllib.request
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.models import DownloadSpec
+import aiohttp
+
+from core.models import DownloadSpec, UpdateEstimate
 from core.streaming import CompletionEvent, EventType, OutputEvent
 from plugins.base import BasePlugin
 
@@ -78,12 +81,138 @@ class GoRuntimePlugin(BasePlugin):
         """Check if Go is available for updates."""
         return self.is_available()
 
-    def get_local_version(self) -> str | None:
+    async def get_installed_version(self) -> str | None:
         """Get the currently installed Go version.
+
+        This is the new async API method (Version Checking Protocol).
 
         Returns:
             Version string (e.g., "go1.21.5") or None if Go is not installed.
         """
+        if not self.is_available():
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "go",
+                "version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                # Output format: "go version go1.21.5 linux/amd64"
+                parts = stdout.decode().strip().split()
+                if len(parts) >= 3:
+                    return parts[2]  # e.g., "go1.21.5"
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the latest Go version from golang.org.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            Latest version string (e.g., "go1.21.5") or None if unable to fetch.
+        """
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(self.VERSION_URL, timeout=aiohttp.ClientTimeout(total=30)) as response,
+            ):
+                if response.status == 200:
+                    # Response format: "go1.21.5\ntime ..."
+                    content = await response.text()
+                    first_line = content.strip().split("\n")[0]
+                    return str(first_line)
+        except (aiohttp.ClientError, TimeoutError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if Go needs to be updated.
+
+        This is the new async API method (Version Checking Protocol).
+
+        Returns:
+            True if remote version is newer than local version,
+            False if up-to-date, None if unable to determine.
+        """
+        from core.version import needs_update as version_needs_update
+
+        local = await self.get_installed_version()
+        remote = await self.get_available_version()
+
+        if not local or not remote:
+            return None
+
+        return version_needs_update(local, remote)
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Estimate download size and time for Go update.
+
+        This is the new async API method (Version Checking Protocol).
+        Fetches the Content-Length header from the download URL.
+
+        Returns:
+            UpdateEstimate with download size, or None if no update needed.
+        """
+        if not await self.needs_update():
+            return None
+
+        remote_version = await self.get_available_version()
+        if not remote_version:
+            return None
+
+        download_url = self._get_download_url(remote_version)
+
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.head(download_url, timeout=aiohttp.ClientTimeout(total=30)) as response,
+            ):
+                if response.status == 200:
+                    content_length = response.headers.get("Content-Length")
+                    if content_length:
+                        download_bytes = int(content_length)
+                        # Estimate ~60 seconds per 100MB download + extraction
+                        estimated_seconds = max(30, int(download_bytes / 1_000_000 * 0.6))
+                        return UpdateEstimate(
+                            download_bytes=download_bytes,
+                            package_count=1,
+                            packages=[f"go-{remote_version}"],
+                            estimated_seconds=estimated_seconds,
+                            confidence=0.8,
+                        )
+        except (aiohttp.ClientError, TimeoutError):
+            pass
+
+        # Return estimate without download size if HEAD request fails
+        return UpdateEstimate(
+            download_bytes=None,
+            package_count=1,
+            packages=[f"go-{remote_version}"],
+            estimated_seconds=120,  # Conservative estimate
+            confidence=0.3,
+        )
+
+    # Backward compatibility aliases (deprecated)
+    def get_local_version(self) -> str | None:
+        """Get the currently installed Go version.
+
+        .. deprecated::
+            Use :meth:`get_installed_version` instead.
+
+        Returns:
+            Version string (e.g., "go1.21.5") or None if Go is not installed.
+        """
+        warnings.warn(
+            "get_local_version() is deprecated, use get_installed_version() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         import subprocess
 
         if not self.is_available():
@@ -108,9 +237,17 @@ class GoRuntimePlugin(BasePlugin):
     def get_remote_version(self) -> str | None:
         """Get the latest Go version from golang.org.
 
+        .. deprecated::
+            Use :meth:`get_available_version` instead.
+
         Returns:
             Latest version string (e.g., "go1.21.5") or None if unable to fetch.
         """
+        warnings.warn(
+            "get_remote_version() is deprecated, use get_available_version() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         try:
             with urllib.request.urlopen(self.VERSION_URL, timeout=30) as response:
                 # Response format: "go1.21.5\ntime ..."
@@ -120,20 +257,6 @@ class GoRuntimePlugin(BasePlugin):
         except Exception:
             pass
         return None
-
-    def needs_update(self) -> bool:
-        """Check if Go needs to be updated.
-
-        Returns:
-            True if remote version is newer than local version.
-        """
-        local = self.get_local_version()
-        remote = self.get_remote_version()
-
-        if not local or not remote:
-            return False
-
-        return local != remote
 
     def _get_download_url(self, version: str) -> str:
         """Get the download URL for a specific Go version.
@@ -168,12 +291,12 @@ class GoRuntimePlugin(BasePlugin):
             DownloadSpec with URL and extraction settings, or None if
             no update is needed.
         """
-        # Check if update is needed
-        if not self.needs_update():
+        # Check if update is needed (using new async API)
+        if not await self.needs_update():
             return None
 
-        # Get the remote version
-        remote_version = self.get_remote_version()
+        # Get the remote version (using new async API)
+        remote_version = await self.get_available_version()
         if not remote_version:
             return None
 
@@ -246,9 +369,9 @@ class GoRuntimePlugin(BasePlugin):
         if not self.is_available():
             return "Go not installed, skipping update", None
 
-        # Get versions
-        local_version = self.get_local_version()
-        remote_version = self.get_remote_version()
+        # Get versions (using new async API)
+        local_version = await self.get_installed_version()
+        remote_version = await self.get_available_version()
 
         output_lines.append(f"Local Go version: {local_version}")
         output_lines.append(f"Remote Go version: {remote_version}")
@@ -355,9 +478,9 @@ echo "Now, local Go version is {remote_version}"
             )
             return
 
-        # Get versions
-        local_version = self.get_local_version()
-        remote_version = self.get_remote_version()
+        # Get versions (using new async API)
+        local_version = await self.get_installed_version()
+        remote_version = await self.get_available_version()
 
         yield OutputEvent(
             event_type=EventType.OUTPUT,

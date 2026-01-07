@@ -6,9 +6,12 @@ This module defines abstract base classes for plugins and executors.
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .models import DownloadEstimate, ExecutionResult, PluginMetadata, PluginStatus
+
+if TYPE_CHECKING:
+    from .models import UpdateEstimate, VersionInfo
 from .streaming import (
     CompletionEvent,
     EventType,
@@ -401,6 +404,141 @@ class UpdatePlugin(ABC):
             NotImplementedError: If the plugin does not support interactive mode.
         """
         raise NotImplementedError(f"Plugin '{self.name}' does not support interactive mode")
+
+    # =========================================================================
+    # Version Checking Protocol (Proposal 3)
+    # =========================================================================
+
+    async def get_installed_version(self) -> str | None:
+        """Get the currently installed version.
+
+        Override this method to provide version information for the
+        managed software. The default implementation returns None.
+
+        Returns:
+            Version string (e.g., "1.2.3") or None if:
+            - Software is not installed
+            - Version cannot be determined
+            - Version checking is not supported
+        """
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the latest available version.
+
+        Override this method to check for the latest version from
+        the upstream source (e.g., GitHub releases, package registry).
+
+        Returns:
+            Version string (e.g., "1.3.0") or None if:
+            - Version cannot be determined
+            - Network is unavailable
+            - Version checking is not supported
+        """
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if an update is needed.
+
+        Compares installed version with available version to determine
+        if an update should be performed.
+
+        The default implementation compares versions from
+        get_installed_version() and get_available_version().
+        Override for custom comparison logic.
+
+        Returns:
+            - True: Update is available
+            - False: Already up-to-date
+            - None: Cannot determine (version check not supported or failed)
+        """
+        installed = await self.get_installed_version()
+        available = await self.get_available_version()
+
+        if installed is None or available is None:
+            return None  # Cannot determine
+
+        # Import here to avoid circular imports
+        from .version import needs_update as version_needs_update
+
+        return version_needs_update(installed, available)
+
+    async def get_update_estimate(self) -> "UpdateEstimate | None":
+        """Get estimated download size and package count for the update.
+
+        Override this method to provide download size estimates. This is
+        particularly useful for package managers like apt, flatpak, and snap
+        that can report download sizes before performing updates.
+
+        Returns:
+            UpdateEstimate with download_bytes, package_count, etc., or None
+            if estimation is not supported or no update is needed.
+        """
+        return None
+
+    async def get_version_info(self) -> "VersionInfo":
+        """Get complete version information.
+
+        This method aggregates version checking results into a
+        single VersionInfo object for easy consumption. If the plugin
+        supports update estimation and an update is needed, it will
+        also include download size and package count information.
+
+        Returns:
+            VersionInfo with installed, available, needs_update, and
+            optionally estimate fields.
+        """
+        from .models import UpdateEstimate, VersionInfo
+
+        try:
+            installed = await self.get_installed_version()
+            available = await self.get_available_version()
+            update_needed = await self.needs_update()
+
+            # Get update estimate if supported and update is needed
+            estimate: UpdateEstimate | None = None
+            if update_needed and self.supports_update_estimate:
+                estimate = await self.get_update_estimate()
+
+            return VersionInfo(
+                installed=installed,
+                available=available,
+                needs_update=update_needed,
+                check_time=datetime.now(tz=UTC),
+                estimate=estimate,
+            )
+        except Exception as e:
+            return VersionInfo(
+                check_time=datetime.now(tz=UTC),
+                error_message=str(e),
+            )
+
+    @property
+    def supports_version_check(self) -> bool:
+        """Check if this plugin supports version checking.
+
+        Returns True if the plugin has implemented version checking
+        by overriding get_installed_version() or get_available_version().
+
+        Returns:
+            True if version checking is supported, False otherwise.
+        """
+        # Check if methods are overridden from UpdatePlugin
+        return (
+            type(self).get_installed_version is not UpdatePlugin.get_installed_version
+            or type(self).get_available_version is not UpdatePlugin.get_available_version
+        )
+
+    @property
+    def supports_update_estimate(self) -> bool:
+        """Check if this plugin supports update estimation.
+
+        Returns True if the plugin has implemented get_update_estimate().
+
+        Returns:
+            True if update estimation is supported, False otherwise.
+        """
+        return type(self).get_update_estimate is not UpdatePlugin.get_update_estimate
 
 
 class PluginExecutor(ABC):

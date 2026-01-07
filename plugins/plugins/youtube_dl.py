@@ -10,6 +10,7 @@ yt-dlp instead, which is a more actively maintained fork.
 
 Official documentation:
 - youtube-dl: https://github.com/ytdl-org/youtube-dl
+- PyPI: https://pypi.org/project/youtube-dl/
 
 Update mechanism:
 - For standalone installations (/usr/local/bin): uses -U flag for self-update
@@ -18,12 +19,16 @@ Update mechanism:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
-import subprocess
 from typing import TYPE_CHECKING
 
+import aiohttp
+
+from core.models import UpdateEstimate
+from core.version import compare_versions
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -35,6 +40,8 @@ if TYPE_CHECKING:
 
 class YoutubeDlPlugin(BasePlugin):
     """Plugin for updating youtube-dl."""
+
+    PYPI_URL = "https://pypi.org/pypi/youtube-dl/json"
 
     @property
     def name(self) -> str:
@@ -59,8 +66,116 @@ class YoutubeDlPlugin(BasePlugin):
         """
         return shutil.which("youtube-dl")
 
+    # =========================================================================
+    # Version Checking Protocol Implementation
+    # =========================================================================
+
+    async def get_installed_version(self) -> str | None:
+        """Get the currently installed youtube-dl version.
+
+        Returns:
+            Version string (e.g., "2021.12.17") or None if not installed.
+        """
+        path = self._get_tool_path()
+        if not path:
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                path,
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                # Version is typically just the date like "2021.12.17"
+                version = stdout.decode().strip().split("\n")[0]
+                return version
+        except (TimeoutError, OSError):
+            pass
+        return None
+
+    async def get_available_version(self) -> str | None:
+        """Get the latest available youtube-dl version from PyPI.
+
+        Returns:
+            Version string or None if cannot determine.
+        """
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(self.PYPI_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp,
+            ):
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("info", {}).get("version")
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            pass
+        return None
+
+    async def needs_update(self) -> bool | None:
+        """Check if youtube-dl needs an update.
+
+        Returns:
+            True if update available, False if up-to-date, None if cannot determine.
+        """
+        installed = await self.get_installed_version()
+        available = await self.get_available_version()
+
+        if installed and available:
+            # youtube-dl versions are date-based (e.g., "2021.12.17")
+            return compare_versions(installed, available) < 0
+
+        return None
+
+    async def get_update_estimate(self) -> UpdateEstimate | None:
+        """Get estimated download size for youtube-dl update.
+
+        Returns:
+            UpdateEstimate or None if no update needed.
+        """
+        needs = await self.needs_update()
+        if not needs:
+            return None
+
+        # Try to get package size from PyPI
+        download_bytes = 2 * 1024 * 1024  # Default ~2MB
+
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(self.PYPI_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp,
+            ):
+                if resp.status == 200:
+                    data = await resp.json()
+                    # Get size from the latest wheel or tarball
+                    urls = data.get("urls", [])
+                    for url_info in urls:
+                        if url_info.get("packagetype") in ("bdist_wheel", "sdist"):
+                            size = url_info.get("size", 0)
+                            if size > 0:
+                                download_bytes = size
+                                break
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            pass
+
+        return UpdateEstimate(
+            download_bytes=download_bytes,
+            package_count=1,
+            packages=["youtube-dl"],
+            estimated_seconds=30,  # 30 seconds typical
+            confidence=0.8,  # High confidence from PyPI
+        )
+
+    # =========================================================================
+    # Legacy API (for backward compatibility)
+    # =========================================================================
+
     def _get_version(self, tool_path: str) -> str | None:
-        """Get the version of youtube-dl.
+        """Get the version of youtube-dl (sync version).
+
+        Deprecated: Use get_installed_version() instead.
 
         Args:
             tool_path: Path to the tool executable.
@@ -68,6 +183,8 @@ class YoutubeDlPlugin(BasePlugin):
         Returns:
             Version string or None if unable to determine.
         """
+        import subprocess
+
         try:
             result = subprocess.run(
                 [tool_path, "--version"],

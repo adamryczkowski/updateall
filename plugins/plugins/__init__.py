@@ -8,13 +8,29 @@ from __future__ import annotations
 import os
 
 from plugins.apt import AptPlugin
+from plugins.atuin import AtuinPlugin
 from plugins.base import BasePlugin, SelfUpdateResult, SelfUpdateStatus
+from plugins.calibre import CalibrePlugin
 from plugins.cargo import CargoPlugin
+from plugins.conda_build import CondaBuildPlugin
+from plugins.conda_clean import CondaCleanPlugin
+from plugins.conda_packages import CondaPackagesPlugin
+from plugins.conda_self import CondaSelfPlugin
 from plugins.flatpak import FlatpakPlugin
+from plugins.foot import FootPlugin
+from plugins.go_packages import GoPackagesPlugin
+from plugins.go_runtime import GoRuntimePlugin
+from plugins.julia_packages import JuliaPackagesPlugin
+from plugins.julia_runtime import JuliaRuntimePlugin
+from plugins.lxc import LxcPlugin
 from plugins.mock_alpha import MockAlphaPlugin
 from plugins.mock_beta import MockBetaPlugin
 from plugins.npm import NpmPlugin
+from plugins.pihole import PiholePlugin
+from plugins.pip import PipPlugin
 from plugins.pipx import PipxPlugin
+from plugins.poetry import PoetryPlugin
+from plugins.r import RPlugin
 from plugins.registry import PluginRegistry, get_registry
 from plugins.repository import (
     DownloadError,
@@ -38,18 +54,39 @@ from plugins.signing import (
     VerificationStatus,
 )
 from plugins.snap import SnapPlugin
+from plugins.spack import SpackPlugin
+from plugins.steam import SteamPlugin
+from plugins.texlive_packages import TexlivePackagesPlugin
+from plugins.texlive_self import TexliveSelfPlugin
+from plugins.waterfox import WaterfoxPlugin
+from plugins.youtube_dl import YoutubeDlPlugin
+from plugins.yt_dlp import YtDlpPlugin
 
 __all__ = [
     "AptPlugin",
+    "AtuinPlugin",
     "BasePlugin",
+    "CalibrePlugin",
     "CargoPlugin",
+    "CondaBuildPlugin",
+    "CondaCleanPlugin",
+    "CondaPackagesPlugin",
+    "CondaSelfPlugin",
     "DownloadError",
     "FlatpakPlugin",
+    "FootPlugin",
+    "GoPackagesPlugin",
+    "GoRuntimePlugin",
     "InstallationError",
     "InstalledPlugin",
+    "JuliaPackagesPlugin",
+    "JuliaRuntimePlugin",
+    "LxcPlugin",
     "MockAlphaPlugin",
     "MockBetaPlugin",
     "NpmPlugin",
+    "PiholePlugin",
+    "PipPlugin",
     "PipxPlugin",
     "PluginInfo",
     "PluginNotFoundError",
@@ -59,6 +96,8 @@ __all__ = [
     "PluginSigner",
     "PluginSource",
     "PluginVerifier",
+    "PoetryPlugin",
+    "RPlugin",
     "RepositoryConfig",
     "RepositoryError",
     "RepositoryIndex",
@@ -66,9 +105,16 @@ __all__ = [
     "SelfUpdateResult",
     "SelfUpdateStatus",
     "SnapPlugin",
+    "SpackPlugin",
+    "SteamPlugin",
+    "TexlivePackagesPlugin",
+    "TexliveSelfPlugin",
     "TrustLevel",
     "VerificationResult",
     "VerificationStatus",
+    "WaterfoxPlugin",
+    "YoutubeDlPlugin",
+    "YtDlpPlugin",
     "get_registry",
     "register_builtin_plugins",
 ]
@@ -98,12 +144,48 @@ def register_builtin_plugins(registry: PluginRegistry | None = None) -> PluginRe
         registry.register(MockBetaPlugin)
     else:
         # Normal mode: register all production plugins
+        # System package managers
         registry.register(AptPlugin)
-        registry.register(CargoPlugin)
         registry.register(FlatpakPlugin)
-        registry.register(NpmPlugin)
-        registry.register(PipxPlugin)
-        registry.register(RustupPlugin)
         registry.register(SnapPlugin)
+
+        # Language package managers
+        registry.register(CargoPlugin)
+        registry.register(NpmPlugin)
+        registry.register(PipPlugin)
+        registry.register(PipxPlugin)
+        registry.register(PoetryPlugin)
+        registry.register(RustupPlugin)
+
+        # Conda ecosystem
+        registry.register(CondaSelfPlugin)
+        registry.register(CondaPackagesPlugin)
+        registry.register(CondaBuildPlugin)
+        registry.register(CondaCleanPlugin)
+
+        # Go ecosystem
+        registry.register(GoRuntimePlugin)
+        registry.register(GoPackagesPlugin)
+
+        # Julia ecosystem
+        registry.register(JuliaRuntimePlugin)
+        registry.register(JuliaPackagesPlugin)
+
+        # TeX Live
+        registry.register(TexliveSelfPlugin)
+        registry.register(TexlivePackagesPlugin)
+
+        # Applications
+        registry.register(AtuinPlugin)
+        registry.register(CalibrePlugin)
+        registry.register(FootPlugin)
+        registry.register(LxcPlugin)
+        registry.register(PiholePlugin)
+        registry.register(RPlugin)
+        registry.register(SpackPlugin)
+        registry.register(SteamPlugin)
+        registry.register(WaterfoxPlugin)
+        registry.register(YoutubeDlPlugin)
+        registry.register(YtDlpPlugin)
 
     return registry

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.events import Key  # noqa: TC002 - Required at runtime for event dispatch
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
@@ -697,6 +698,42 @@ class InteractiveTabbedApp(App[None]):
             "Ctrl+Tab: Next tab | Ctrl+Shift+Tab: Prev tab | Alt+1-9: Go to tab | Ctrl+Q: Quit",
             title="Keyboard Shortcuts",
         )
+
+    async def on_key(self, event: Key) -> None:
+        """Handle key events and route them to the active PTY.
+
+        This method intercepts all key events and routes them appropriately:
+        - Navigation keys (Ctrl+Tab, etc.) are handled by Textual's binding system
+        - All other keys are sent to the active PTY session
+
+        Args:
+            event: The key event from Textual.
+        """
+        # Skip if no input router or no active pane
+        if not self._input_router or not self.active_pane:
+            return
+
+        # Get the key string in a format the input router understands
+        key = event.key
+
+        # Check if this is a navigation key that should be handled by the app
+        if self._input_router.get_route_target(key).name == "APP":
+            # Let Textual handle navigation keys via its binding system
+            return
+
+        # For printable characters, use event.character directly
+        # This handles uppercase letters, symbols, etc. correctly
+        if event.character is not None and event.is_printable:
+            # Send the character directly to PTY
+            data = event.character.encode("utf-8")
+            await self._handle_pty_input(data)
+        else:
+            # For special keys (Enter, Backspace, arrows, etc.), use the router
+            await self._input_router.route_key(key)
+
+        # Prevent the key from being processed further by Textual
+        event.prevent_default()
+        event.stop()
 
 
 async def run_with_interactive_tabbed_ui(

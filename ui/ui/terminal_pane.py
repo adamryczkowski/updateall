@@ -17,6 +17,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.containers import Container
+from textual.events import Resize  # noqa: TC002 - Required at runtime for event dispatch
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Static
@@ -344,6 +345,37 @@ class TerminalPane(Container):
     async def on_unmount(self) -> None:
         """Handle unmount event."""
         await self.stop()
+
+    async def on_resize(self, event: Resize) -> None:
+        """Handle resize events to adjust terminal dimensions.
+
+        When the widget is resized, this calculates the new terminal dimensions
+        based on the available space and updates both the terminal screen and
+        the PTY session.
+
+        Args:
+            event: The resize event containing the new size.
+        """
+        # Calculate new terminal dimensions from widget size
+        # The widget size is in character cells (Textual uses character-based layout)
+        new_width = event.size.width
+        new_height = event.size.height
+
+        # Account for borders (2 characters: left + right for width, top + bottom for height)
+        # The TerminalView has a border defined in CSS
+        border_width = 2
+        border_height = 2
+
+        # Account for status bar if shown (1 line)
+        status_bar_height = 1 if self.config.show_status_bar else 0
+
+        # Calculate available space for terminal content
+        columns = max(10, new_width - border_width)
+        lines = max(5, new_height - border_height - status_bar_height)
+
+        # Only resize if dimensions actually changed
+        if columns != self.config.columns or lines != self.config.lines:
+            await self.resize(columns, lines)
 
     def watch_is_focused(self, focused: bool) -> None:
         """React to focus changes.

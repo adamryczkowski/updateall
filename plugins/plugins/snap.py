@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from core.models import UpdateCommand
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -33,8 +34,34 @@ class SnapPlugin(BasePlugin):
         """Return plugin description."""
         return "Canonical Snap package manager"
 
+    def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
+        """Get commands to refresh snaps.
+
+        Args:
+            dry_run: If True, return dry-run commands.
+
+        Returns:
+            List of UpdateCommand objects.
+        """
+        if dry_run:
+            return [
+                UpdateCommand(
+                    cmd=["snap", "refresh", "--list"],
+                    description="List available snap updates (dry run)",
+                    sudo=False,
+                )
+            ]
+        return [
+            UpdateCommand(
+                cmd=["snap", "refresh"],
+                description="Refresh all snaps",
+                sudo=True,
+                success_patterns=("All snaps up to date",),
+            )
+        ]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
-        """Execute snap refresh.
+        """Execute snap refresh (legacy API).
 
         Args:
             config: Plugin configuration.

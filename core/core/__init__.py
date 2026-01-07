@@ -27,6 +27,7 @@ from core.models import (
     PluginStatus,
     RunResult,
     SystemConfig,
+    UpdateCommand,
 )
 from core.mutex import (
     DeadlockError,
@@ -165,6 +166,7 @@ __all__ = [
     "StreamEventQueue",
     "StreamProgressEvent",
     "SystemConfig",
+    "UpdateCommand",
     "UpdatePlugin",
     "WaiterInfo",
     "YamlConfigLoader",

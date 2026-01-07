@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from core.models import UpdateCommand
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -33,8 +34,34 @@ class RustupPlugin(BasePlugin):
         """Return plugin description."""
         return "Rust toolchain manager (rustup)"
 
+    def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
+        """Get commands to update Rust toolchains.
+
+        Args:
+            dry_run: If True, return dry-run commands.
+
+        Returns:
+            List of UpdateCommand objects.
+        """
+        if dry_run:
+            return [
+                UpdateCommand(
+                    cmd=["rustup", "check"],
+                    description="Check for Rust toolchain updates (dry run)",
+                    sudo=False,
+                )
+            ]
+        return [
+            UpdateCommand(
+                cmd=["rustup", "update"],
+                description="Update Rust toolchains",
+                sudo=False,
+                success_patterns=("unchanged", "up to date"),
+            )
+        ]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
-        """Execute rustup update.
+        """Execute rustup update (legacy API).
 
         Args:
             config: Plugin configuration.

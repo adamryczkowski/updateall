@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from core.models import UpdateCommand
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -15,7 +16,8 @@ class NpmPlugin(BasePlugin):
     """Plugin for NPM package manager (Node.js global packages).
 
     Executes:
-    1. npm update -g - update all globally installed packages
+    1. npm outdated -g - check for outdated packages
+    2. npm update -g - update all globally installed packages
     """
 
     @property
@@ -33,8 +35,47 @@ class NpmPlugin(BasePlugin):
         """Return plugin description."""
         return "Node.js NPM global package manager"
 
+    def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
+        """Get commands to update NPM global packages.
+
+        Args:
+            dry_run: If True, return dry-run commands.
+
+        Returns:
+            List of UpdateCommand objects.
+        """
+        if dry_run:
+            return [
+                UpdateCommand(
+                    cmd=["npm", "outdated", "-g"],
+                    description="List outdated global packages (dry run)",
+                    sudo=False,
+                    # npm outdated returns exit code 1 if packages are outdated
+                    ignore_exit_codes=(1,),
+                )
+            ]
+        return [
+            UpdateCommand(
+                cmd=["npm", "outdated", "-g", "--json"],
+                description="Check for outdated packages",
+                sudo=False,
+                step_number=1,
+                total_steps=2,
+                timeout_seconds=75,  # Quarter of default 300s
+                # npm outdated returns exit code 1 if packages are outdated
+                ignore_exit_codes=(1,),
+            ),
+            UpdateCommand(
+                cmd=["npm", "update", "-g"],
+                description="Update global packages",
+                sudo=False,
+                step_number=2,
+                total_steps=2,
+            ),
+        ]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
-        """Execute npm update -g.
+        """Execute npm update -g (legacy API).
 
         Args:
             config: Plugin configuration.

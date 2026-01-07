@@ -1,6 +1,9 @@
 """Tests for core models."""
 
+from dataclasses import FrozenInstanceError
 from datetime import datetime
+
+import pytest
 
 from core.models import (
     DownloadEstimate,
@@ -11,7 +14,9 @@ from core.models import (
     PluginConfig,
     PluginMetadata,
     PluginStatus,
+    UpdateCommand,
 )
+from core.streaming import Phase
 
 
 class TestPluginConfig:
@@ -227,3 +232,120 @@ class TestDownloadEstimate:
         # With None
         estimate_none = DownloadEstimate()
         assert estimate_none.has_size_info is False
+
+
+# =============================================================================
+# Declarative Command Execution API Tests (Proposal 1)
+# =============================================================================
+
+
+class TestUpdateCommand:
+    """Tests for UpdateCommand dataclass."""
+
+    def test_update_command_defaults(self) -> None:
+        """UCM-001: Default values are correct."""
+        cmd = UpdateCommand(cmd=["echo", "test"])
+
+        assert cmd.cmd == ["echo", "test"]
+        assert cmd.description == ""
+        assert cmd.sudo is False
+        assert cmd.timeout_seconds is None
+        assert cmd.phase == Phase.EXECUTE
+        assert cmd.step_name is None
+        assert cmd.step_number is None
+        assert cmd.total_steps is None
+        assert cmd.ignore_exit_codes == ()
+        assert cmd.error_patterns == ()
+        assert cmd.success_patterns == ()
+        assert cmd.env is None
+        assert cmd.cwd is None
+
+    def test_update_command_required_fields(self) -> None:
+        """UCM-002: cmd is required."""
+        with pytest.raises(TypeError):
+            UpdateCommand()  # type: ignore
+
+    def test_update_command_immutable(self) -> None:
+        """UCM-003: Dataclass is frozen."""
+        cmd = UpdateCommand(cmd=["echo", "test"])
+        with pytest.raises(FrozenInstanceError):
+            cmd.description = "new description"  # type: ignore
+
+    def test_update_command_tuple_fields(self) -> None:
+        """UCM-004: Tuple fields work correctly."""
+        cmd = UpdateCommand(
+            cmd=["echo"],
+            ignore_exit_codes=(1, 2),
+            error_patterns=("ERROR", "FATAL"),
+            success_patterns=("OK", "SUCCESS"),
+        )
+
+        assert 1 in cmd.ignore_exit_codes
+        assert 2 in cmd.ignore_exit_codes
+        assert "ERROR" in cmd.error_patterns
+        assert "FATAL" in cmd.error_patterns
+        assert "OK" in cmd.success_patterns
+        assert "SUCCESS" in cmd.success_patterns
+
+    def test_update_command_empty_cmd_raises(self) -> None:
+        """UCM-005: Empty cmd list raises ValueError."""
+        with pytest.raises(ValueError, match="cmd must be a non-empty list"):
+            UpdateCommand(cmd=[])
+
+    def test_update_command_full_values(self) -> None:
+        """UCM-006: All values can be set."""
+        cmd = UpdateCommand(
+            cmd=["apt", "upgrade", "-y"],
+            description="Upgrade all packages",
+            sudo=True,
+            timeout_seconds=3600,
+            phase=Phase.EXECUTE,
+            step_name="upgrade",
+            step_number=2,
+            total_steps=2,
+            ignore_exit_codes=(100,),
+            error_patterns=("FATAL",),
+            success_patterns=("0 upgraded",),
+            env={"DEBIAN_FRONTEND": "noninteractive"},
+            cwd="/tmp",
+        )
+
+        assert cmd.cmd == ["apt", "upgrade", "-y"]
+        assert cmd.description == "Upgrade all packages"
+        assert cmd.sudo is True
+        assert cmd.timeout_seconds == 3600
+        assert cmd.phase == Phase.EXECUTE
+        assert cmd.step_name == "upgrade"
+        assert cmd.step_number == 2
+        assert cmd.total_steps == 2
+        assert cmd.ignore_exit_codes == (100,)
+        assert cmd.error_patterns == ("FATAL",)
+        assert cmd.success_patterns == ("0 upgraded",)
+        assert cmd.env == {"DEBIAN_FRONTEND": "noninteractive"}
+        assert cmd.cwd == "/tmp"
+
+    def test_update_command_step_numbers_optional(self) -> None:
+        """UCM-007: Step numbers are optional."""
+        cmd = UpdateCommand(cmd=["echo"], step_name="test")
+
+        assert cmd.step_name == "test"
+        assert cmd.step_number is None
+        assert cmd.total_steps is None
+
+    def test_update_command_partial_step_info(self) -> None:
+        """UCM-008: Partial step info (only step_name and step_number) works."""
+        cmd = UpdateCommand(cmd=["echo"], step_name="test", step_number=1)
+
+        assert cmd.step_name == "test"
+        assert cmd.step_number == 1
+        assert cmd.total_steps is None
+
+    def test_update_command_different_phases(self) -> None:
+        """UCM-009: Different phases can be set."""
+        cmd_check = UpdateCommand(cmd=["apt", "update"], phase=Phase.CHECK)
+        cmd_download = UpdateCommand(cmd=["apt", "download"], phase=Phase.DOWNLOAD)
+        cmd_execute = UpdateCommand(cmd=["apt", "upgrade"], phase=Phase.EXECUTE)
+
+        assert cmd_check.phase == Phase.CHECK
+        assert cmd_download.phase == Phase.DOWNLOAD
+        assert cmd_execute.phase == Phase.EXECUTE

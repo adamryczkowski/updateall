@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from core.models import UpdateCommand
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -49,8 +50,34 @@ class CargoPlugin(BasePlugin):
         )
         return return_code == 0
 
+    def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
+        """Get commands to update Cargo crates.
+
+        Args:
+            dry_run: If True, return dry-run commands.
+
+        Returns:
+            List of UpdateCommand objects.
+        """
+        if dry_run:
+            return [
+                UpdateCommand(
+                    cmd=["cargo", "install-update", "-l"],
+                    description="List Cargo crate updates (dry run)",
+                    sudo=False,
+                )
+            ]
+        return [
+            UpdateCommand(
+                cmd=["cargo", "install-update", "-a"],
+                description="Update all Cargo crates",
+                sudo=False,
+                success_patterns=("No packages need updating",),
+            )
+        ]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
-        """Execute cargo install-update -a.
+        """Execute cargo install-update -a (legacy API).
 
         Args:
             config: Plugin configuration.

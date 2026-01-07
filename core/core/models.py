@@ -4,12 +4,18 @@ This module defines Pydantic models for configuration, plugin definitions,
 and execution results.
 """
 
-from datetime import datetime
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime  # noqa: TC003 - needed at runtime by Pydantic
 from enum import Enum
-from pathlib import Path
-from typing import Any
+from pathlib import Path  # noqa: TC003 - needed at runtime by Pydantic
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from .streaming import Phase
 
 
 class PluginStatus(str, Enum):
@@ -225,3 +231,79 @@ class DownloadEstimate(BaseModel):
     def has_size_info(self) -> bool:
         """Check if size information is available."""
         return self.total_bytes is not None and self.total_bytes > 0
+
+
+# =============================================================================
+# Declarative Command Execution API (Proposal 1)
+# =============================================================================
+
+
+def _get_default_phase() -> Phase:
+    """Get the default Phase value.
+
+    This is a factory function to avoid circular import issues.
+    """
+    from .streaming import Phase
+
+    return Phase.EXECUTE
+
+
+@dataclass(frozen=True)
+class UpdateCommand:
+    """A single command in an update sequence.
+
+    This dataclass represents a command that can be executed as part of
+    a plugin's update process. Plugins can return a list of UpdateCommand
+    objects from get_update_commands() to declaratively specify their
+    update logic.
+
+    Attributes:
+        cmd: Command and arguments as a list of strings.
+        description: Human-readable description of what the command does.
+        sudo: Whether to prepend sudo to the command.
+        timeout_seconds: Custom timeout in seconds (None = use default).
+        phase: Execution phase (CHECK, DOWNLOAD, or EXECUTE).
+        step_name: Logical name for this step (e.g., "refresh", "upgrade").
+        step_number: Step number for progress reporting (1-based).
+        total_steps: Total number of steps for progress reporting.
+        ignore_exit_codes: Exit codes that should not be treated as errors.
+        error_patterns: Patterns in output that indicate error (even with exit 0).
+        success_patterns: Patterns in output that indicate success (even with non-zero exit).
+        env: Additional environment variables for the command.
+        cwd: Working directory for the command.
+
+    Example:
+        >>> cmd = UpdateCommand(
+        ...     cmd=["apt", "upgrade", "-y"],
+        ...     description="Upgrade packages",
+        ...     sudo=True,
+        ...     step_number=2,
+        ...     total_steps=2,
+        ...     success_patterns=("0 upgraded",),
+        ... )
+    """
+
+    cmd: list[str]
+    description: str = ""
+    sudo: bool = False
+    timeout_seconds: int | None = None
+    phase: Phase = field(default_factory=_get_default_phase)
+
+    # Multi-step support
+    step_name: str | None = None
+    step_number: int | None = None
+    total_steps: int | None = None
+
+    # Error handling
+    ignore_exit_codes: tuple[int, ...] = ()
+    error_patterns: tuple[str, ...] = ()
+    success_patterns: tuple[str, ...] = ()
+
+    # Environment
+    env: dict[str, str] | None = None
+    cwd: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the command after initialization."""
+        if not self.cmd:
+            raise ValueError("cmd must be a non-empty list")

@@ -19,6 +19,7 @@ from core.models import (
     PluginConfig,
     PluginResult,
     PluginStatus,
+    UpdateCommand,
     UpdateStatus,
 )
 from core.streaming import (
@@ -264,6 +265,55 @@ class BasePlugin(UpdatePlugin):
         """
         return 0
 
+    # =========================================================================
+    # Declarative Command Execution API
+    # =========================================================================
+
+    def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:  # noqa: ARG002
+        """Get the list of commands to execute for an update.
+
+        Override this method to use the declarative command execution API.
+        When this method returns a non-empty list, the plugin will use
+        _execute_commands_streaming() instead of _execute_update_streaming().
+
+        This is the preferred way to implement plugins as it reduces
+        boilerplate and provides automatic:
+        - Command header output
+        - Step progress tracking
+        - Output collection for package counting
+        - Success/error pattern matching
+        - Exit code handling
+
+        Args:
+            dry_run: If True, return commands for dry-run mode.
+
+        Returns:
+            List of UpdateCommand objects to execute sequentially.
+            Return empty list to use the legacy _execute_update_streaming() API.
+
+        Example:
+            def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
+                if dry_run:
+                    return [UpdateCommand(cmd=["apt", "update", "--dry-run"])]
+                return [
+                    UpdateCommand(
+                        cmd=["apt", "update"],
+                        description="Update package lists",
+                        sudo=True,
+                        step_number=1,
+                        total_steps=2,
+                    ),
+                    UpdateCommand(
+                        cmd=["apt", "upgrade", "-y"],
+                        description="Upgrade packages",
+                        sudo=True,
+                        step_number=2,
+                        total_steps=2,
+                    ),
+                ]
+        """
+        return []
+
     async def _run_command(
         self,
         cmd: list[str],
@@ -271,6 +321,8 @@ class BasePlugin(UpdatePlugin):
         *,
         check: bool = True,  # noqa: ARG002
         sudo: bool = False,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         """Run a shell command with timeout.
 
@@ -279,6 +331,8 @@ class BasePlugin(UpdatePlugin):
             timeout: Timeout in seconds.
             check: Whether to raise on non-zero exit code (reserved for future use).
             sudo: Whether to prepend sudo to the command.
+            cwd: Working directory for the command.
+            env: Environment variables for the command.
 
         Returns:
             Tuple of (return_code, stdout, stderr).
@@ -297,6 +351,8 @@ class BasePlugin(UpdatePlugin):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
             )
 
             stdout, stderr = await asyncio.wait_for(
@@ -349,6 +405,8 @@ class BasePlugin(UpdatePlugin):
         *,
         sudo: bool = False,
         phase: Phase = Phase.EXECUTE,  # noqa: ARG002
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Run a command with streaming output.
 
@@ -360,6 +418,8 @@ class BasePlugin(UpdatePlugin):
             timeout: Timeout in seconds.
             sudo: Whether to prepend sudo to the command.
             phase: Current execution phase (reserved for future progress events).
+            cwd: Working directory for the command.
+            env: Environment variables for the command.
 
         Yields:
             StreamEvent objects as output is produced.
@@ -375,6 +435,8 @@ class BasePlugin(UpdatePlugin):
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+            env=env,
         )
 
         # Use bounded queue for backpressure (Risk T3 mitigation)
@@ -547,8 +609,11 @@ class BasePlugin(UpdatePlugin):
             )
             return
 
-        # In dry-run mode, just report what would be done
-        if dry_run:
+        # Check for declarative commands first
+        commands = self.get_update_commands(dry_run=dry_run)
+
+        # In dry-run mode with no declarative commands, just report what would be done
+        if dry_run and not commands:
             yield OutputEvent(
                 event_type=EventType.OUTPUT,
                 plugin_name=self.name,
@@ -575,19 +640,30 @@ class BasePlugin(UpdatePlugin):
             return
 
         # Run the streaming update
-        log.info("starting_streaming_update")
+        log.info("starting_streaming_update", declarative=bool(commands))
 
         try:
             final_success = False
             final_error: str | None = None
 
-            async for event in self._execute_update_streaming():
-                yield event
+            # Use declarative execution if commands are provided
+            if commands:
+                async for event in self._execute_commands_streaming(commands):
+                    yield event
 
-                # Track completion status
-                if isinstance(event, CompletionEvent):
-                    final_success = event.success
-                    final_error = event.error_message
+                    # Track completion status
+                    if isinstance(event, CompletionEvent):
+                        final_success = event.success
+                        final_error = event.error_message
+            else:
+                # Fall back to legacy API
+                async for event in self._execute_update_streaming():
+                    yield event
+
+                    # Track completion status
+                    if isinstance(event, CompletionEvent):
+                        final_success = event.success
+                        final_error = event.error_message
 
             # Emit phase end
             yield PhaseEvent(
@@ -655,6 +731,139 @@ class BasePlugin(UpdatePlugin):
             exit_code=0 if error is None else 1,
             packages_updated=self._count_updated_packages(output) if output else 0,
             error_message=error,
+        )
+
+    async def _execute_commands_streaming(
+        self,
+        commands: list[UpdateCommand],
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute a list of commands sequentially with streaming output.
+
+        This method is used by execute_streaming() when get_update_commands()
+        returns a non-empty list. It provides automatic:
+        - Command header output with step progress
+        - Output collection for package counting
+        - Success/error pattern matching
+        - Exit code handling with ignore_exit_codes support
+
+        Args:
+            commands: List of UpdateCommand objects to execute.
+
+        Yields:
+            StreamEvent objects as commands execute.
+            Final event is always a CompletionEvent.
+        """
+        log = logger.bind(plugin=self.name)
+        collected_output: list[str] = []
+        final_success = True
+        final_error: str | None = None
+        final_exit_code = 0
+
+        for i, command in enumerate(commands):
+            # Emit header for this command
+            step_info = ""
+            if command.step_number and command.total_steps:
+                step_info = f"[{command.step_number}/{command.total_steps}] "
+            elif len(commands) > 1:
+                step_info = f"[{i + 1}/{len(commands)}] "
+
+            header = f"=== {step_info}{command.description or ' '.join(command.cmd)} ==="
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=header,
+                stream="stdout",
+            )
+
+            log.debug(
+                "executing_command",
+                step=i + 1,
+                total=len(commands),
+                cmd=" ".join(command.cmd),
+            )
+
+            # Track output for this command
+            command_output: list[str] = []
+            command_success = True
+            command_exit_code = 0
+            has_success_pattern = False
+            has_error_pattern = False
+
+            # Execute the command
+            timeout = command.timeout_seconds or 300  # Default 5 minutes
+            async for event in self._run_command_streaming(
+                command.cmd,
+                timeout,
+                sudo=command.sudo,
+                phase=command.phase,
+            ):
+                # Collect output for pattern matching and package counting
+                if isinstance(event, OutputEvent):
+                    command_output.append(event.line)
+                    collected_output.append(event.line)
+
+                    # Check for success patterns
+                    if command.success_patterns:
+                        for pattern in command.success_patterns:
+                            if pattern in event.line:
+                                has_success_pattern = True
+                                break
+
+                    # Check for error patterns
+                    if command.error_patterns:
+                        for pattern in command.error_patterns:
+                            if pattern in event.line:
+                                has_error_pattern = True
+                                break
+
+                    yield event
+
+                elif isinstance(event, CompletionEvent):
+                    command_exit_code = event.exit_code
+                    command_success = event.success
+                    # Don't yield the intermediate completion event
+
+                else:
+                    # Pass through other events (progress, etc.)
+                    yield event
+
+            # Determine final success for this command based on pattern matching
+            # and exit codes (error patterns take precedence over success patterns)
+            if has_error_pattern:
+                command_success = False
+                final_error = "Error pattern detected in output"
+            elif has_success_pattern or command_exit_code in command.ignore_exit_codes:
+                command_success = True
+            elif command_exit_code != 0:
+                command_success = False
+                final_error = f"Command exited with code {command_exit_code}"
+
+            # If this command failed, stop execution
+            if not command_success:
+                final_success = False
+                final_exit_code = command_exit_code
+                log.warning(
+                    "command_failed",
+                    step=i + 1,
+                    exit_code=command_exit_code,
+                    error=final_error,
+                )
+                break
+
+        # Calculate package count from collected output
+        full_output = "\n".join(collected_output)
+        packages_updated = self._count_updated_packages(full_output)
+
+        # Emit final completion event
+        yield CompletionEvent(
+            event_type=EventType.COMPLETION,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            success=final_success,
+            exit_code=final_exit_code,
+            packages_updated=packages_updated,
+            error_message=final_error,
         )
 
     # =========================================================================

@@ -8,6 +8,7 @@ This guide explains how to create plugins for Update-All. Plugins extend Update-
 - [Quick Start Tutorial](#quick-start-tutorial)
 - [Plugin Architecture](#plugin-architecture)
 - [API Reference](#api-reference)
+  - [Declarative Command Execution API](#declarative-command-execution-api) *(Recommended)*
 - [Advanced Topics](#advanced-topics)
   - [Plugins Requiring Sudo](#plugins-requiring-sudo)
   - [Multi-Step Updates](#multi-step-updates)
@@ -45,7 +46,9 @@ Update-All uses a plugin-based architecture where each package manager (apt, fla
 
 Let's create a simple plugin for a fictional package manager called "mypkg".
 
-### Step 1: Create the Plugin Class
+### Step 1: Create the Plugin Class (Declarative API - Recommended)
+
+The recommended way to create plugins is using the **Declarative Command Execution API**. This approach reduces boilerplate and provides automatic streaming, progress tracking, and error handling.
 
 Create a new file `plugins/plugins/mypkg.py`:
 
@@ -57,6 +60,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from core.models import UpdateCommand
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -86,8 +90,89 @@ class MyPkgPlugin(BasePlugin):
         """Return a human-readable description."""
         return "MyPkg package manager"
 
+    def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
+        """Declare the commands to execute for an update.
+
+        This is the preferred way to implement plugins. The base class
+        handles streaming, progress tracking, and error handling automatically.
+
+        Args:
+            dry_run: If True, return commands for dry-run mode.
+
+        Returns:
+            List of UpdateCommand objects to execute sequentially.
+        """
+        if dry_run:
+            return [
+                UpdateCommand(
+                    cmd=["mypkg", "update", "--dry-run"],
+                    description="Check for updates (dry run)",
+                )
+            ]
+        return [
+            UpdateCommand(
+                cmd=["mypkg", "update"],
+                description="Update package lists",
+                step_number=1,
+                total_steps=2,
+                timeout_seconds=150,
+            ),
+            UpdateCommand(
+                cmd=["mypkg", "upgrade", "-y"],
+                description="Upgrade packages",
+                step_number=2,
+                total_steps=2,
+            ),
+        ]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
-        """Execute the update commands.
+        """Legacy API fallback (not used when get_update_commands is implemented)."""
+        return "", None
+
+    def _count_updated_packages(self, output: str) -> int:
+        """Count updated packages from command output.
+
+        Args:
+            output: The combined command output.
+
+        Returns:
+            Number of packages that were updated.
+        """
+        # Look for patterns like "Upgraded: package-name"
+        return len(re.findall(r"^Upgraded:\s+", output, re.MULTILINE))
+```
+
+### Step 1 (Alternative): Create the Plugin Class (Legacy API)
+
+If you need more control over command execution, you can use the legacy API:
+
+```python
+"""MyPkg package manager plugin (legacy API)."""
+
+from __future__ import annotations
+
+import re
+from typing import TYPE_CHECKING
+
+from plugins.base import BasePlugin
+
+if TYPE_CHECKING:
+    from core.models import PluginConfig
+
+
+class MyPkgPlugin(BasePlugin):
+    """Plugin for MyPkg package manager."""
+
+    @property
+    def name(self) -> str:
+        return "mypkg"
+
+    @property
+    def command(self) -> str:
+        return "mypkg"
+
+    async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
+        """Execute the update commands manually.
 
         Args:
             config: Plugin configuration with timeout and options.
@@ -126,15 +211,6 @@ class MyPkgPlugin(BasePlugin):
         return "\n".join(output_parts), None
 
     def _count_updated_packages(self, output: str) -> int:
-        """Count updated packages from command output.
-
-        Args:
-            output: The combined command output.
-
-        Returns:
-            Number of packages that were updated.
-        """
-        # Look for patterns like "Upgraded: package-name"
         return len(re.findall(r"^Upgraded:\s+", output, re.MULTILINE))
 ```
 
@@ -460,6 +536,110 @@ class PluginStatus(str, Enum):
     SKIPPED = "skipped"
     TIMEOUT = "timeout"
 ```
+
+### Declarative Command Execution API
+
+The **Declarative Command Execution API** is the recommended way to implement plugins. Instead of manually implementing `_execute_update_streaming()`, you declare the commands to execute and the base class handles everything automatically.
+
+#### `get_update_commands(dry_run: bool) -> list[UpdateCommand]`
+
+Override this method to use the declarative API. When it returns a non-empty list, the base class uses `_execute_commands_streaming()` instead of `_execute_update_streaming()`.
+
+```python
+from core.models import UpdateCommand
+
+def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
+    if dry_run:
+        return [
+            UpdateCommand(
+                cmd=["apt", "update", "--dry-run"],
+                description="Check for updates (dry run)",
+            )
+        ]
+    return [
+        UpdateCommand(
+            cmd=["apt", "update"],
+            description="Update package lists",
+            sudo=True,
+            step_number=1,
+            total_steps=2,
+        ),
+        UpdateCommand(
+            cmd=["apt", "upgrade", "-y"],
+            description="Upgrade packages",
+            sudo=True,
+            step_number=2,
+            total_steps=2,
+        ),
+    ]
+```
+
+#### UpdateCommand
+
+The `UpdateCommand` dataclass defines a single command to execute:
+
+```python
+from dataclasses import dataclass
+from core.streaming import Phase
+
+@dataclass(frozen=True)
+class UpdateCommand:
+    # Required
+    cmd: list[str]                    # Command and arguments
+
+    # Optional - Display
+    description: str = ""             # Human-readable description
+    step_name: str | None = None      # Step identifier
+    step_number: int | None = None    # Step number (e.g., 1)
+    total_steps: int | None = None    # Total steps (e.g., 2)
+
+    # Optional - Execution
+    sudo: bool = False                # Prepend sudo
+    timeout_seconds: int | None = None # Command timeout (default: 300)
+    phase: Phase = Phase.EXECUTE      # Execution phase
+    env: dict[str, str] | None = None # Environment variables
+    cwd: str | None = None            # Working directory
+
+    # Optional - Error handling
+    ignore_exit_codes: tuple[int, ...] = ()  # Exit codes to treat as success
+    error_patterns: tuple[str, ...] = ()     # Patterns that indicate failure
+    success_patterns: tuple[str, ...] = ()   # Patterns that indicate success
+```
+
+#### Benefits of Declarative API
+
+1. **Less boilerplate** — No need to implement streaming logic manually
+2. **Automatic headers** — Step progress like `[1/2] Update package lists` is generated
+3. **Pattern matching** — Success/error patterns override exit codes
+4. **Output collection** — Output is collected for `_count_updated_packages()`
+5. **Consistent behavior** — All plugins behave the same way
+
+#### Pattern Matching Priority
+
+When determining command success, patterns are checked in this order:
+
+1. **Error patterns** — If any error pattern matches, command fails
+2. **Success patterns** — If any success pattern matches, command succeeds
+3. **Ignored exit codes** — If exit code is in `ignore_exit_codes`, command succeeds
+4. **Exit code** — Non-zero exit code means failure
+
+Example with patterns:
+
+```python
+UpdateCommand(
+    cmd=["snap", "refresh"],
+    sudo=True,
+    # These patterns override exit code
+    success_patterns=("All snaps up to date",),
+    error_patterns=("FATAL", "CRITICAL"),
+    # Exit code 1 is also acceptable
+    ignore_exit_codes=(1,),
+)
+```
+
+#### Fallback to Legacy API
+
+If `get_update_commands()` returns an empty list (the default), the base class falls back to `_execute_update_streaming()` and `_execute_update()`. This ensures backward compatibility with existing plugins.
 
 ## Advanced Topics
 

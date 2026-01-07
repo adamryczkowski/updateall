@@ -1291,7 +1291,21 @@ This ensures backward compatibility with existing plugins.
 
 ### Plugins Requiring Sudo
 
-For plugins that need root privileges:
+For plugins that need root privileges, Update-All provides two complementary approaches:
+
+1. **Sudo Declaration API** (Recommended) — Declare sudo requirements upfront
+2. **Runtime sudo flag** — Use `sudo=True` in `_run_command()` calls
+
+#### Sudo Declaration API
+
+The **Sudo Declaration API** allows plugins to declare their sudo requirements upfront. This enables:
+- Automatic sudoers file generation for passwordless execution
+- Pre-checking sudo availability before execution
+- Prompting for password once at start, rather than mid-execution
+
+##### `sudo_commands: list[str]`
+
+Override this property to declare which commands require sudo:
 
 ```python
 class AptPlugin(BasePlugin):
@@ -1303,6 +1317,14 @@ class AptPlugin(BasePlugin):
     def command(self) -> str:
         return "apt"
 
+    @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        APT requires sudo for both update and upgrade operations.
+        """
+        return ["/usr/bin/apt"]
+
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
         # Use sudo=True for privileged commands
         return_code, stdout, stderr = await self._run_command(
@@ -1312,6 +1334,113 @@ class AptPlugin(BasePlugin):
         )
         # ...
 ```
+
+##### `requires_sudo: bool`
+
+This is a computed property that returns `True` if `sudo_commands` is non-empty:
+
+```python
+plugin = AptPlugin()
+if plugin.requires_sudo:
+    print(f"Plugin {plugin.name} requires sudo for: {plugin.sudo_commands}")
+```
+
+##### Dynamic Sudo Commands
+
+For plugins where the command path may vary, use `shutil.which()`:
+
+```python
+import shutil
+
+class TexliveSelfPlugin(BasePlugin):
+    @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        tlmgr path varies by installation.
+        """
+        tlmgr_path = shutil.which("tlmgr")
+        if tlmgr_path:
+            return [tlmgr_path]
+        return ["/usr/bin/tlmgr"]  # Fallback
+```
+
+##### Multiple Sudo Commands
+
+For plugins that use multiple commands with sudo:
+
+```python
+class WaterfoxPlugin(BasePlugin):
+    @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        Waterfox installation requires sudo for:
+        - rm: Removing old installation from /opt/waterfox
+        - mv: Moving new installation to /opt/waterfox
+        - chown: Setting ownership to root:root
+        """
+        return ["/bin/rm", "/bin/mv", "/bin/chown"]
+```
+
+#### Generating Sudoers File
+
+The `core.sudo` module provides utilities to generate sudoers files:
+
+```python
+from core.sudo import generate_sudoers_file, collect_sudo_requirements
+from plugins import get_registry
+
+# Collect requirements from all plugins
+registry = get_registry()
+plugins = [registry.get(name) for name in registry.list_plugins()]
+requirements = collect_sudo_requirements(plugins)
+
+# Generate sudoers file content
+sudoers_content = generate_sudoers_file(
+    requirements,
+    username="adam",  # Optional, defaults to current user
+    include_header=True,
+)
+
+print(sudoers_content)
+# Output:
+# # update-all sudoers configuration
+# # Generated automatically - do not edit manually
+# adam ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/snap, /bin/rm, /bin/mv, /bin/chown
+```
+
+#### Validating Sudo Access
+
+Before running plugins, you can validate sudo access:
+
+```python
+from core.sudo import validate_sudo_access, collect_sudo_requirements
+
+requirements = collect_sudo_requirements(plugins)
+validation = await validate_sudo_access(requirements)
+
+if validation.all_accessible:
+    print("All sudo commands are accessible")
+else:
+    print(f"Missing sudo access for: {validation.inaccessible_commands}")
+```
+
+#### Runtime sudo Flag
+
+For simple cases, you can still use the runtime `sudo=True` flag without declaring `sudo_commands`:
+
+```python
+async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
+    return_code, stdout, stderr = await self._run_command(
+        ["apt", "update"],
+        timeout=config.timeout_seconds,
+        sudo=True,  # This prepends "sudo" to the command
+    )
+    # ...
+```
+
+However, this approach doesn't enable automatic sudoers generation or pre-execution validation.
 
 ### Multi-Step Updates
 

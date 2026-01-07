@@ -47,6 +47,17 @@ class TexliveSelfPlugin(BasePlugin):
         """Return the plugin description."""
         return "Update TeX Live Manager (tlmgr) itself"
 
+    @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        tlmgr requires sudo for update operations on system-wide installations.
+        """
+        tlmgr_path = shutil.which("tlmgr")
+        if tlmgr_path:
+            return [tlmgr_path]
+        return ["/usr/bin/tlmgr"]
+
     def is_available(self) -> bool:
         """Check if tlmgr is installed."""
         return shutil.which("tlmgr") is not None

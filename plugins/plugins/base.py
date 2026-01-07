@@ -88,6 +88,43 @@ class BasePlugin(UpdatePlugin):
         """Return a human-readable description of the plugin."""
         return f"Update plugin for {self.name}"
 
+    # =========================================================================
+    # Sudo Declaration API (Proposal 5)
+    # =========================================================================
+
+    @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        Override this property to declare which commands need sudo privileges.
+        This enables:
+        1. Automatic sudoers file generation
+        2. Pre-checking sudo availability before execution
+        3. Prompting for password once at start
+
+        Returns:
+            List of full paths to commands requiring sudo.
+            Return empty list if no sudo is needed.
+
+        Example:
+            @property
+            def sudo_commands(self) -> list[str]:
+                return ["/usr/bin/apt", "/usr/bin/dpkg"]
+        """
+        return []
+
+    @property
+    def requires_sudo(self) -> bool:
+        """Check if any commands require sudo.
+
+        This is a convenience property that checks if sudo_commands
+        returns a non-empty list.
+
+        Returns:
+            True if sudo_commands is non-empty, False otherwise.
+        """
+        return len(self.sudo_commands) > 0
+
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.
 

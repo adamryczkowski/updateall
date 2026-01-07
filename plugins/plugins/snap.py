@@ -34,6 +34,14 @@ class SnapPlugin(BasePlugin):
         """Return plugin description."""
         return "Canonical Snap package manager"
 
+    @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        Snap requires sudo for refresh operations.
+        """
+        return ["/usr/bin/snap"]
+
     def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
         """Get commands to refresh snaps.
 

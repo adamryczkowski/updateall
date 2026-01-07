@@ -64,6 +64,17 @@ class WaterfoxPlugin(BasePlugin):
         return "Update Waterfox browser from GitHub releases"
 
     @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        Waterfox installation requires sudo for:
+        - rm: Removing old installation from /opt/waterfox
+        - mv: Moving new installation to /opt/waterfox
+        - chown: Setting ownership to root:root
+        """
+        return ["/bin/rm", "/bin/mv", "/bin/chown"]
+
+    @property
     def supports_download(self) -> bool:
         """Check if this plugin supports separate download phase.
 

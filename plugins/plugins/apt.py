@@ -35,6 +35,14 @@ class AptPlugin(BasePlugin):
         """Return plugin description."""
         return "Debian/Ubuntu APT package manager"
 
+    @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        APT requires sudo for both update and upgrade operations.
+        """
+        return ["/usr/bin/apt"]
+
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.
 

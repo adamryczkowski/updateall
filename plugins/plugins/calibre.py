@@ -79,6 +79,15 @@ class CalibrePlugin(BasePlugin):
         return "Calibre e-book management software"
 
     @property
+    def sudo_commands(self) -> list[str]:
+        """Return list of commands that require sudo.
+
+        Calibre installer runs a shell script with sudo that installs
+        the binary to /opt/calibre. The installer script uses sh.
+        """
+        return ["/bin/sh"]
+
+    @property
     def supports_download(self) -> bool:
         """Check if this plugin supports separate download phase.
 

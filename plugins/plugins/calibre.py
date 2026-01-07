@@ -1,11 +1,24 @@
-"""Calibre e-book management software update plugin."""
+"""Calibre e-book management software update plugin.
+
+This plugin uses the Centralized Download Manager API (Proposal 2) for:
+- Automatic retry with exponential backoff
+- Bandwidth limiting
+- Download caching
+- Progress reporting
+
+Note: Calibre uses a shell installer script that downloads the actual binary.
+The DownloadManager is used to download the installer script with retry logic.
+"""
 
 from __future__ import annotations
 
 import re
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.models import DownloadSpec
 from core.streaming import (
     CompletionEvent,
     EventType,
@@ -58,6 +71,37 @@ class CalibrePlugin(BasePlugin):
     def description(self) -> str:
         """Return plugin description."""
         return "Calibre e-book management software"
+
+    @property
+    def supports_download(self) -> bool:
+        """Check if this plugin supports separate download phase.
+
+        Returns:
+            True - Calibre plugin supports separate download (installer script).
+        """
+        return True
+
+    # Installer script URL
+    INSTALLER_URL = "https://download.calibre-ebook.com/linux-installer.sh"
+
+    async def get_download_spec(self) -> DownloadSpec | None:
+        """Get the download specification for Calibre installer.
+
+        This method uses the Centralized Download Manager API to download
+        the installer script with retry logic and progress reporting.
+
+        Returns:
+            DownloadSpec for the installer script.
+        """
+        # Calibre always downloads the installer - it checks for updates internally
+        download_path = Path(tempfile.gettempdir()) / "calibre-installer.sh"
+
+        return DownloadSpec(
+            url=self.INSTALLER_URL,
+            destination=download_path,
+            extract=False,  # It's a shell script, not an archive
+            timeout_seconds=120,  # 2 minutes for the small installer script
+        )
 
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.

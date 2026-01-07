@@ -12,6 +12,13 @@ Update mechanism:
 - Get local version via `waterfox --version`
 - Get remote version from GitHub API (MrAlex94/Waterfox releases)
 - Download and extract tarball to /opt/waterfox
+
+This plugin uses the Centralized Download Manager API (Proposal 2) for:
+- Automatic retry with exponential backoff
+- Bandwidth limiting
+- Download caching with checksum verification
+- Archive extraction (tar.bz2)
+- Progress reporting
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.models import DownloadSpec
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -54,6 +62,18 @@ class WaterfoxPlugin(BasePlugin):
     def description(self) -> str:
         """Return the plugin description."""
         return "Update Waterfox browser from GitHub releases"
+
+    @property
+    def supports_download(self) -> bool:
+        """Check if this plugin supports separate download phase.
+
+        Returns:
+            True - Waterfox plugin supports separate download.
+        """
+        return True
+
+    # Cache for remote version to avoid multiple API calls
+    _cached_remote_version: str | None = None
 
     def _get_waterfox_path(self) -> str | None:
         """Get the path to the Waterfox executable.
@@ -166,6 +186,41 @@ class WaterfoxPlugin(BasePlugin):
         return (
             f"https://storage-waterfox.netdna-ssl.com/releases/linux64/installer/"
             f"waterfox-classic-{version}.en-US.linux-x86_64.tar.bz2"
+        )
+
+    async def get_download_spec(self) -> DownloadSpec | None:
+        """Get the download specification for Waterfox.
+
+        This method uses the Centralized Download Manager API to specify
+        the download URL, destination, and extraction settings.
+
+        Returns:
+            DownloadSpec with URL and extraction settings, or None if
+            no update is needed.
+        """
+        # Check if update is needed
+        if not self.needs_update():
+            return None
+
+        # Get the remote version
+        remote_version = self.get_remote_version()
+        if not remote_version:
+            return None
+
+        # Get download URL
+        download_url = self._get_download_url(remote_version)
+
+        # Create a temporary directory for the download
+        # The DownloadManager will handle extraction
+        download_path = Path(tempfile.gettempdir()) / f"waterfox-{remote_version}.tar.bz2"
+
+        return DownloadSpec(
+            url=download_url,
+            destination=download_path,
+            extract=True,
+            extract_format="tar.bz2",
+            headers={"User-Agent": "update-all-plugin"},
+            timeout_seconds=600,  # 10 minutes for large download
         )
 
     def _count_updated_packages(self, output: str) -> int:

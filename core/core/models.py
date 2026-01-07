@@ -75,6 +75,32 @@ class GlobalConfig(BaseModel):
         description="Enable streaming output from plugins. Set to False to fall back to batch mode.",
     )
 
+    # Centralized Download Manager Configuration
+    download_cache_dir: Path | None = Field(
+        default=None,
+        description="Directory for caching downloaded files. None = use system temp.",
+    )
+    download_max_retries: int = Field(
+        default=3,
+        description="Maximum number of retry attempts for failed downloads.",
+    )
+    download_retry_delay: float = Field(
+        default=1.0,
+        description="Initial delay between retries in seconds (exponential backoff).",
+    )
+    download_bandwidth_limit: int | None = Field(
+        default=None,
+        description="Maximum download bandwidth in bytes per second. None = unlimited.",
+    )
+    download_max_concurrent: int = Field(
+        default=2,
+        description="Maximum number of concurrent downloads.",
+    )
+    download_timeout_seconds: int = Field(
+        default=3600,
+        description="Default timeout for downloads in seconds.",
+    )
+
 
 class SystemConfig(BaseModel):
     """Complete system configuration."""
@@ -231,6 +257,155 @@ class DownloadEstimate(BaseModel):
     def has_size_info(self) -> bool:
         """Check if size information is available."""
         return self.total_bytes is not None and self.total_bytes > 0
+
+
+# =============================================================================
+# Centralized Download Manager API (Proposal 2)
+# =============================================================================
+
+
+def _infer_extract_format(url: str) -> str | None:
+    """Infer archive format from URL.
+
+    Args:
+        url: Download URL.
+
+    Returns:
+        Archive format string or None if not an archive.
+    """
+    url_lower = url.lower()
+    if url_lower.endswith(".tar.gz") or url_lower.endswith(".tgz"):
+        return "tar.gz"
+    if url_lower.endswith(".tar.bz2") or url_lower.endswith(".tbz2"):
+        return "tar.bz2"
+    if url_lower.endswith(".tar.xz") or url_lower.endswith(".txz"):
+        return "tar.xz"
+    if url_lower.endswith(".zip"):
+        return "zip"
+    return None
+
+
+@dataclass(frozen=True)
+class DownloadSpec:
+    """Specification for files to download.
+
+    This dataclass describes what a plugin needs to download. The core
+    download manager handles the actual download with progress reporting,
+    retry logic, and caching.
+
+    Attributes:
+        url: URL to download from.
+        destination: Local path to save the file (or extract directory).
+        expected_size: Expected file size in bytes (for progress reporting).
+        checksum: Checksum for verification (format: "algorithm:hash").
+        extract: Whether to extract the file after download.
+        extract_format: Archive format ("tar.gz", "tar.bz2", "zip", "tar.xz").
+        headers: Additional HTTP headers for the request.
+        timeout_seconds: Download timeout (None = use default).
+        version_url: URL to check latest version (optional).
+        version_pattern: Regex to extract version from version_url response.
+
+    Example:
+        >>> from pathlib import Path
+        >>> spec = DownloadSpec(
+        ...     url="https://example.com/file.tar.gz",
+        ...     destination=Path("/tmp/download"),
+        ...     expected_size=100_000_000,
+        ...     checksum="sha256:abc123...",
+        ...     extract=True,
+        ... )
+    """
+
+    url: str
+    destination: Path
+    expected_size: int | None = None
+    checksum: str | None = None  # "sha256:abc123..." or "md5:abc123..."
+    extract: bool = False
+    extract_format: str | None = None  # "tar.gz", "tar.bz2", "zip", "tar.xz"
+    headers: dict[str, str] = field(default_factory=dict)
+    timeout_seconds: int | None = None
+
+    # For version checking (optional)
+    version_url: str | None = None
+    version_pattern: str | None = None  # Regex to extract version
+
+    def __post_init__(self) -> None:
+        """Validate and normalize the download spec."""
+        if not self.url:
+            raise ValueError("url must be non-empty")
+
+        # Infer extract format from URL if extract=True but no format specified
+        if self.extract and not self.extract_format:
+            inferred = _infer_extract_format(self.url)
+            if inferred:
+                object.__setattr__(self, "extract_format", inferred)
+
+        # Validate checksum format if provided
+        if self.checksum:
+            if ":" not in self.checksum:
+                raise ValueError(
+                    "checksum must be in format 'algorithm:hash' (e.g., 'sha256:abc123...')"
+                )
+            algorithm = self.checksum.split(":")[0].lower()
+            if algorithm not in ("sha256", "sha512", "sha1", "md5"):
+                raise ValueError(
+                    f"Unsupported checksum algorithm: {algorithm}. "
+                    "Supported: sha256, sha512, sha1, md5"
+                )
+
+    @property
+    def checksum_algorithm(self) -> str | None:
+        """Get the checksum algorithm."""
+        if not self.checksum:
+            return None
+        return self.checksum.split(":")[0].lower()
+
+    @property
+    def checksum_value(self) -> str | None:
+        """Get the checksum hash value."""
+        if not self.checksum:
+            return None
+        return self.checksum.split(":", 1)[1]
+
+    @property
+    def filename(self) -> str:
+        """Get the filename from the URL."""
+        from urllib.parse import urlparse
+
+        path = urlparse(self.url).path
+        return path.split("/")[-1] if "/" in path else path
+
+
+@dataclass
+class DownloadResult:
+    """Result of a download operation.
+
+    Attributes:
+        success: Whether the download succeeded.
+        path: Path to the downloaded file (or extracted directory).
+        bytes_downloaded: Total bytes downloaded.
+        duration_seconds: Time taken for download.
+        from_cache: Whether the file was served from cache.
+        checksum_verified: Whether checksum was verified.
+        error_message: Error message if download failed.
+        spec: The original download specification.
+    """
+
+    success: bool
+    path: Path | None = None
+    bytes_downloaded: int = 0
+    duration_seconds: float = 0.0
+    from_cache: bool = False
+    checksum_verified: bool = False
+    error_message: str | None = None
+    spec: DownloadSpec | None = None
+
+    @property
+    def download_speed_mbps(self) -> float | None:
+        """Calculate download speed in MB/s."""
+        if self.duration_seconds <= 0 or self.bytes_downloaded <= 0:
+            return None
+        return (self.bytes_downloaded / (1024 * 1024)) / self.duration_seconds
 
 
 # =============================================================================

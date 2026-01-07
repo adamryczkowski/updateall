@@ -9,6 +9,7 @@ This guide explains how to create plugins for Update-All. Plugins extend Update-
 - [Plugin Architecture](#plugin-architecture)
 - [API Reference](#api-reference)
   - [Declarative Command Execution API](#declarative-command-execution-api) *(Recommended)*
+  - [Centralized Download Manager API](#centralized-download-manager-api) *(Recommended)*
 - [Advanced Topics](#advanced-topics)
   - [Plugins Requiring Sudo](#plugins-requiring-sudo)
   - [Multi-Step Updates](#multi-step-updates)
@@ -640,6 +641,292 @@ UpdateCommand(
 #### Fallback to Legacy API
 
 If `get_update_commands()` returns an empty list (the default), the base class falls back to `_execute_update_streaming()` and `_execute_update()`. This ensures backward compatibility with existing plugins.
+
+### Centralized Download Manager API
+
+The **Centralized Download Manager API** is the recommended way to handle file downloads in plugins. Instead of implementing download logic manually, you declare what to download using `DownloadSpec` and the core download manager handles everything automatically.
+
+#### Why Use the Centralized Download Manager?
+
+1. **Automatic retry with exponential backoff** — Failed downloads are retried automatically
+2. **Bandwidth limiting** — Configurable rate limiting to avoid saturating network
+3. **Download caching** — Files are cached with checksum verification to avoid re-downloading
+4. **Archive extraction** — Automatic extraction of tar.gz, tar.bz2, tar.xz, and zip files
+5. **Progress reporting** — Real-time progress events for UI display
+6. **Checksum verification** — SHA256, SHA512, SHA1, and MD5 checksum support
+7. **Consistent behavior** — All plugins handle downloads the same way
+
+#### `get_download_spec(dry_run: bool) -> DownloadSpec | None`
+
+Override this method to specify a single file to download. When it returns a `DownloadSpec`, the base class `download_streaming()` method uses the centralized download manager.
+
+```python
+from pathlib import Path
+from core.models import DownloadSpec
+from plugins.base import BasePlugin
+
+
+class MyDownloadPlugin(BasePlugin):
+    """Plugin that downloads a file from the internet."""
+
+    DOWNLOAD_URL = "https://example.com/releases/latest/myapp.tar.gz"
+    INSTALL_PATH = "/opt/myapp"
+
+    @property
+    def name(self) -> str:
+        return "myapp"
+
+    @property
+    def command(self) -> str:
+        return "myapp"
+
+    @property
+    def supports_download(self) -> bool:
+        """Enable separate download phase."""
+        return True
+
+    def get_download_spec(self, dry_run: bool = False) -> DownloadSpec | None:
+        """Declare the file to download.
+
+        Args:
+            dry_run: If True, return None (no download in dry-run mode).
+
+        Returns:
+            DownloadSpec describing the file to download, or None.
+        """
+        if dry_run:
+            return None
+
+        return DownloadSpec(
+            url=self.DOWNLOAD_URL,
+            destination=Path(self.INSTALL_PATH),
+            expected_size=50_000_000,  # 50 MB (for progress reporting)
+            checksum="sha256:abc123...",  # Optional: verify download
+            extract=True,  # Extract the archive after download
+            # extract_format is auto-detected from URL (.tar.gz)
+        )
+```
+
+#### `get_download_specs(dry_run: bool) -> list[DownloadSpec]`
+
+For plugins that need to download multiple files, override this method instead:
+
+```python
+def get_download_specs(self, dry_run: bool = False) -> list[DownloadSpec]:
+    """Declare multiple files to download.
+
+    Args:
+        dry_run: If True, return empty list.
+
+    Returns:
+        List of DownloadSpec objects.
+    """
+    if dry_run:
+        return []
+
+    return [
+        DownloadSpec(
+            url="https://example.com/component-a.tar.gz",
+            destination=Path("/opt/myapp/component-a"),
+            extract=True,
+        ),
+        DownloadSpec(
+            url="https://example.com/component-b.tar.gz",
+            destination=Path("/opt/myapp/component-b"),
+            extract=True,
+        ),
+    ]
+```
+
+#### DownloadSpec
+
+The `DownloadSpec` dataclass describes what to download:
+
+```python
+from dataclasses import dataclass, field
+from pathlib import Path
+
+@dataclass(frozen=True)
+class DownloadSpec:
+    # Required
+    url: str                              # URL to download from
+    destination: Path                     # Where to save (or extract to)
+
+    # Optional - Progress & Verification
+    expected_size: int | None = None      # Expected size in bytes
+    checksum: str | None = None           # "sha256:abc123..." or "md5:abc123..."
+
+    # Optional - Archive Handling
+    extract: bool = False                 # Extract after download
+    extract_format: str | None = None     # "tar.gz", "tar.bz2", "zip", "tar.xz"
+                                          # (auto-detected from URL if not specified)
+
+    # Optional - Request Configuration
+    headers: dict[str, str] = field(default_factory=dict)  # HTTP headers
+    timeout_seconds: int | None = None    # Download timeout
+
+    # Optional - Version Checking
+    version_url: str | None = None        # URL to check latest version
+    version_pattern: str | None = None    # Regex to extract version
+```
+
+#### DownloadResult
+
+The download manager returns a `DownloadResult` with details about the download:
+
+```python
+@dataclass
+class DownloadResult:
+    success: bool                         # Whether download succeeded
+    path: Path | None = None              # Path to downloaded/extracted file
+    bytes_downloaded: int = 0             # Total bytes downloaded
+    duration_seconds: float = 0.0         # Time taken
+    from_cache: bool = False              # Whether served from cache
+    checksum_verified: bool = False       # Whether checksum was verified
+    error_message: str | None = None      # Error message if failed
+    spec: DownloadSpec | None = None      # Original specification
+```
+
+#### Checksum Format
+
+Checksums must be in the format `algorithm:hash`:
+
+```python
+# SHA-256 (recommended)
+checksum="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+# SHA-512
+checksum="sha512:cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce..."
+
+# MD5 (not recommended for security, but supported)
+checksum="md5:d41d8cd98f00b204e9800998ecf8427e"
+```
+
+#### Archive Extraction
+
+When `extract=True`, the download manager automatically extracts archives:
+
+| Format | Extensions | Notes |
+|--------|------------|-------|
+| `tar.gz` | `.tar.gz`, `.tgz` | Most common for Linux |
+| `tar.bz2` | `.tar.bz2`, `.tbz2` | Better compression |
+| `tar.xz` | `.tar.xz`, `.txz` | Best compression |
+| `zip` | `.zip` | Cross-platform |
+
+The format is auto-detected from the URL extension, or you can specify it explicitly:
+
+```python
+DownloadSpec(
+    url="https://example.com/file",  # No extension
+    destination=Path("/opt/myapp"),
+    extract=True,
+    extract_format="tar.gz",  # Explicit format
+)
+```
+
+#### Real-World Example: Waterfox Plugin
+
+Here's how the Waterfox plugin uses the Centralized Download Manager:
+
+```python
+"""Waterfox update plugin using Centralized Download Manager."""
+
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+
+from core.models import DownloadSpec
+from plugins.base import BasePlugin
+
+
+class WaterfoxPlugin(BasePlugin):
+    """Plugin for updating Waterfox browser."""
+
+    GITHUB_API_URL = "https://api.github.com/repos/MrAlex94/Waterfox/releases/latest"
+    INSTALL_PATH = "/opt/waterfox"
+
+    @property
+    def name(self) -> str:
+        return "waterfox"
+
+    @property
+    def command(self) -> str:
+        return "waterfox"
+
+    @property
+    def supports_download(self) -> bool:
+        return True
+
+    def get_download_spec(self, dry_run: bool = False) -> DownloadSpec | None:
+        """Get download specification for Waterfox.
+
+        Returns:
+            DownloadSpec for the Waterfox tar.bz2 archive.
+        """
+        if dry_run:
+            return None
+
+        # Get the download URL from GitHub API
+        download_url = self._get_download_url()
+        if not download_url:
+            return None
+
+        return DownloadSpec(
+            url=download_url,
+            destination=Path(self.INSTALL_PATH),
+            extract=True,
+            # extract_format auto-detected as "tar.bz2"
+            headers={"Accept": "application/octet-stream"},
+        )
+
+    def _get_download_url(self) -> str | None:
+        """Fetch the download URL from GitHub releases API."""
+        # Implementation fetches from GITHUB_API_URL
+        # and returns the tar.bz2 asset URL
+        ...
+```
+
+#### Configuration Options
+
+The download manager can be configured globally in `GlobalConfig`:
+
+```python
+from core.models import GlobalConfig
+
+config = GlobalConfig(
+    # Cache directory (None = system temp)
+    download_cache_dir=Path("/var/cache/update-all"),
+
+    # Retry settings
+    download_max_retries=3,           # Max retry attempts
+    download_retry_delay=1.0,         # Initial delay (exponential backoff)
+
+    # Bandwidth limiting
+    download_bandwidth_limit=None,    # Bytes/sec (None = unlimited)
+    download_max_concurrent=2,        # Max parallel downloads
+
+    # Timeout
+    download_timeout_seconds=3600,    # Default timeout (1 hour)
+)
+```
+
+Or in YAML configuration:
+
+```yaml
+# config.yaml
+global:
+  download_cache_dir: /var/cache/update-all
+  download_max_retries: 3
+  download_retry_delay: 1.0
+  download_bandwidth_limit: null  # unlimited
+  download_max_concurrent: 2
+  download_timeout_seconds: 3600
+```
+
+#### Fallback to Manual Downloads
+
+If `get_download_spec()` returns `None` (the default), the base class falls back to the manual `download_streaming()` implementation. This ensures backward compatibility with existing plugins.
 
 ## Advanced Topics
 

@@ -7,6 +7,13 @@ Official download: https://go.dev/dl/
 Version API: https://golang.org/VERSION?m=text
 
 Note: This plugin installs Go to ~/apps/go with version-specific directories.
+
+This plugin uses the Centralized Download Manager API (Proposal 2) for:
+- Automatic retry with exponential backoff
+- Bandwidth limiting
+- Download caching with checksum verification
+- Archive extraction (tar.gz)
+- Progress reporting
 """
 
 from __future__ import annotations
@@ -14,11 +21,13 @@ from __future__ import annotations
 import asyncio
 import platform
 import shutil
+import tempfile
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.models import DownloadSpec
 from core.streaming import CompletionEvent, EventType, OutputEvent
 from plugins.base import BasePlugin
 
@@ -51,6 +60,15 @@ class GoRuntimePlugin(BasePlugin):
     def description(self) -> str:
         """Return the plugin description."""
         return "Update Go programming language runtime"
+
+    @property
+    def supports_download(self) -> bool:
+        """Check if this plugin supports separate download phase.
+
+        Returns:
+            True - Go runtime plugin supports separate download.
+        """
+        return True
 
     def is_available(self) -> bool:
         """Check if Go is installed."""
@@ -139,6 +157,39 @@ class GoRuntimePlugin(BasePlugin):
 
         filename = f"{version}.linux-{arch}.tar.gz"
         return f"{self.DOWNLOAD_BASE_URL}/{filename}"
+
+    async def get_download_spec(self) -> DownloadSpec | None:
+        """Get the download specification for Go runtime.
+
+        This method uses the Centralized Download Manager API to specify
+        the download URL, destination, and extraction settings.
+
+        Returns:
+            DownloadSpec with URL and extraction settings, or None if
+            no update is needed.
+        """
+        # Check if update is needed
+        if not self.needs_update():
+            return None
+
+        # Get the remote version
+        remote_version = self.get_remote_version()
+        if not remote_version:
+            return None
+
+        # Get download URL
+        download_url = self._get_download_url(remote_version)
+
+        # Create a temporary directory for the download
+        download_path = Path(tempfile.gettempdir()) / f"{remote_version}.linux-amd64.tar.gz"
+
+        return DownloadSpec(
+            url=download_url,
+            destination=download_path,
+            extract=True,
+            extract_format="tar.gz",
+            timeout_seconds=600,  # 10 minutes for large download
+        )
 
     def _count_updated_packages(self, output: str) -> int:
         """Count updated items from output.

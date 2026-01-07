@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from core.download_manager import get_download_manager
 from core.interfaces import UpdatePlugin
 from core.models import (
     DownloadEstimate,
+    DownloadSpec,
     ExecutionResult,
     PluginConfig,
     PluginResult,
@@ -897,6 +899,67 @@ class BasePlugin(UpdatePlugin):
         """
         return None
 
+    # =========================================================================
+    # Centralized Download Manager API
+    # =========================================================================
+
+    async def get_download_spec(self) -> DownloadSpec | None:
+        """Get the download specification for this plugin.
+
+        Override this method to use the Centralized Download Manager.
+        When this method returns a DownloadSpec, download_streaming() will
+        automatically use the DownloadManager instead of the legacy download()
+        method.
+
+        This is the preferred way to implement downloads as it provides:
+        - Automatic retry with exponential backoff
+        - Bandwidth limiting
+        - Download caching with checksum verification
+        - Archive extraction (tar.gz, tar.bz2, tar.xz, zip)
+        - Progress reporting
+
+        Returns:
+            DownloadSpec with URL, destination, and options, or None if
+            no download is needed or the legacy API should be used.
+
+        Example:
+            async def get_download_spec(self) -> DownloadSpec | None:
+                version = await self._get_latest_version()
+                return DownloadSpec(
+                    url=f"https://example.com/app-{version}.tar.gz",
+                    destination=Path(f"/tmp/app-{version}.tar.gz"),
+                    checksum=f"sha256:{await self._get_checksum(version)}",
+                    extract=True,
+                    extract_to=Path("/opt/app"),
+                )
+        """
+        return None
+
+    async def get_download_specs(self) -> list[DownloadSpec]:
+        """Get multiple download specifications for this plugin.
+
+        Override this method when the plugin needs to download multiple files.
+        When this method returns a non-empty list, download_streaming() will
+        download all files sequentially using the DownloadManager.
+
+        Returns:
+            List of DownloadSpec objects, or empty list if no downloads needed.
+
+        Example:
+            async def get_download_specs(self) -> list[DownloadSpec]:
+                return [
+                    DownloadSpec(
+                        url="https://example.com/main.tar.gz",
+                        destination=Path("/tmp/main.tar.gz"),
+                    ),
+                    DownloadSpec(
+                        url="https://example.com/data.zip",
+                        destination=Path("/tmp/data.zip"),
+                    ),
+                ]
+        """
+        return []
+
     async def download(self) -> AsyncIterator[StreamEvent]:
         """Download updates without applying them.
 
@@ -918,8 +981,14 @@ class BasePlugin(UpdatePlugin):
     async def download_streaming(self) -> AsyncIterator[StreamEvent]:
         """Download updates with streaming progress output.
 
-        This is the streaming version of download() that provides
-        real-time progress updates during the download phase.
+        This method provides real-time progress updates during the download phase.
+        It automatically uses the Centralized Download Manager when get_download_spec()
+        or get_download_specs() returns download specifications.
+
+        The priority order is:
+        1. get_download_specs() - for multiple downloads
+        2. get_download_spec() - for single download
+        3. download() - legacy API fallback
 
         Yields:
             StreamEvent objects with download progress.
@@ -960,13 +1029,64 @@ class BasePlugin(UpdatePlugin):
             final_success = False
             final_error: str | None = None
 
-            async for event in self.download():
-                yield event
+            # Check for Centralized Download Manager API first
+            download_specs = await self.get_download_specs()
+            if not download_specs:
+                # Try single download spec
+                single_spec = await self.get_download_spec()
+                if single_spec:
+                    download_specs = [single_spec]
 
-                # Track completion status
-                if isinstance(event, CompletionEvent):
-                    final_success = event.success
-                    final_error = event.error_message
+            if download_specs:
+                # Use Centralized Download Manager
+                log.info("using_download_manager", spec_count=len(download_specs))
+                download_manager = get_download_manager()
+
+                for i, spec in enumerate(download_specs):
+                    log.debug(
+                        "downloading_spec",
+                        index=i + 1,
+                        total=len(download_specs),
+                        url=spec.url,
+                    )
+
+                    # Emit progress header for multiple downloads
+                    if len(download_specs) > 1:
+                        yield OutputEvent(
+                            event_type=EventType.OUTPUT,
+                            plugin_name=self.name,
+                            timestamp=datetime.now(tz=UTC),
+                            line=f"=== [{i + 1}/{len(download_specs)}] Downloading {spec.url} ===",
+                            stream="stdout",
+                        )
+
+                    # Stream download progress
+                    async for event in download_manager.download_streaming(
+                        spec, plugin_name=self.name
+                    ):
+                        yield event
+
+                        # Track completion status
+                        if isinstance(event, CompletionEvent):
+                            if not event.success:
+                                final_success = False
+                                final_error = event.error_message
+                                break
+                            final_success = True
+
+                    # Stop if a download failed
+                    if final_error:
+                        break
+            else:
+                # Fall back to legacy download() API
+                log.info("using_legacy_download_api")
+                async for event in self.download():
+                    yield event
+
+                    # Track completion status
+                    if isinstance(event, CompletionEvent):
+                        final_success = event.success
+                        final_error = event.error_message
 
             # Emit phase end
             yield PhaseEvent(

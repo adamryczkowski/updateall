@@ -2,11 +2,14 @@
 
 from dataclasses import FrozenInstanceError
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from core.models import (
     DownloadEstimate,
+    DownloadResult,
+    DownloadSpec,
     ExecutionResult,
     GlobalConfig,
     LogLevel,
@@ -349,3 +352,364 @@ class TestUpdateCommand:
         assert cmd_check.phase == Phase.CHECK
         assert cmd_download.phase == Phase.DOWNLOAD
         assert cmd_execute.phase == Phase.EXECUTE
+
+
+# =============================================================================
+# Centralized Download Manager API Tests (Proposal 2)
+# =============================================================================
+
+
+class TestDownloadSpec:
+    """Tests for DownloadSpec dataclass."""
+
+    def test_create_minimal_spec(self) -> None:
+        """DS-001: Create spec with only required fields."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.gz",
+            destination=Path("/tmp/download"),
+        )
+
+        assert spec.url == "https://example.com/file.tar.gz"
+        assert spec.destination == Path("/tmp/download")
+        assert spec.expected_size is None
+        assert spec.checksum is None
+        assert spec.extract is False
+        assert spec.extract_format is None
+        assert spec.headers == {}
+        assert spec.timeout_seconds is None
+
+    def test_create_full_spec(self) -> None:
+        """DS-002: Create spec with all fields."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.gz",
+            destination=Path("/tmp/download"),
+            expected_size=100_000_000,
+            checksum="sha256:abc123def456",
+            extract=True,
+            extract_format="tar.gz",
+            headers={"User-Agent": "test-agent"},
+            timeout_seconds=600,
+            version_url="https://example.com/version",
+            version_pattern=r"v(\d+\.\d+\.\d+)",
+        )
+
+        assert spec.url == "https://example.com/file.tar.gz"
+        assert spec.destination == Path("/tmp/download")
+        assert spec.expected_size == 100_000_000
+        assert spec.checksum == "sha256:abc123def456"
+        assert spec.extract is True
+        assert spec.extract_format == "tar.gz"
+        assert spec.headers == {"User-Agent": "test-agent"}
+        assert spec.timeout_seconds == 600
+        assert spec.version_url == "https://example.com/version"
+        assert spec.version_pattern == r"v(\d+\.\d+\.\d+)"
+
+    def test_url_required(self) -> None:
+        """DS-003: Empty URL raises ValueError."""
+        with pytest.raises(ValueError, match="url must be non-empty"):
+            DownloadSpec(url="", destination=Path("/tmp"))
+
+    def test_infer_extract_format_tar_gz(self) -> None:
+        """DS-004: Automatic format inference for .tar.gz."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.gz",
+            destination=Path("/tmp"),
+            extract=True,
+        )
+        assert spec.extract_format == "tar.gz"
+
+        # Also test .tgz extension
+        spec_tgz = DownloadSpec(
+            url="https://example.com/file.tgz",
+            destination=Path("/tmp"),
+            extract=True,
+        )
+        assert spec_tgz.extract_format == "tar.gz"
+
+    def test_infer_extract_format_tar_bz2(self) -> None:
+        """DS-005: Automatic format inference for .tar.bz2."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.bz2",
+            destination=Path("/tmp"),
+            extract=True,
+        )
+        assert spec.extract_format == "tar.bz2"
+
+        # Also test .tbz2 extension
+        spec_tbz2 = DownloadSpec(
+            url="https://example.com/file.tbz2",
+            destination=Path("/tmp"),
+            extract=True,
+        )
+        assert spec_tbz2.extract_format == "tar.bz2"
+
+    def test_infer_extract_format_zip(self) -> None:
+        """DS-006: Automatic format inference for .zip."""
+        spec = DownloadSpec(
+            url="https://example.com/file.zip",
+            destination=Path("/tmp"),
+            extract=True,
+        )
+        assert spec.extract_format == "zip"
+
+    def test_infer_extract_format_tar_xz(self) -> None:
+        """DS-007: Automatic format inference for .tar.xz."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.xz",
+            destination=Path("/tmp"),
+            extract=True,
+        )
+        assert spec.extract_format == "tar.xz"
+
+        # Also test .txz extension
+        spec_txz = DownloadSpec(
+            url="https://example.com/file.txz",
+            destination=Path("/tmp"),
+            extract=True,
+        )
+        assert spec_txz.extract_format == "tar.xz"
+
+    def test_explicit_format_not_overwritten(self) -> None:
+        """DS-008: Explicit format is not overwritten by inference."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.gz",
+            destination=Path("/tmp"),
+            extract=True,
+            extract_format="custom",
+        )
+        assert spec.extract_format == "custom"
+
+    def test_no_format_inference_when_extract_false(self) -> None:
+        """DS-009: No format inference when extract is False."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.gz",
+            destination=Path("/tmp"),
+            extract=False,
+        )
+        assert spec.extract_format is None
+
+    def test_checksum_format_sha256(self) -> None:
+        """DS-010: sha256 checksum format is valid."""
+        spec = DownloadSpec(
+            url="https://example.com/file",
+            destination=Path("/tmp"),
+            checksum="sha256:abc123def456",
+        )
+        assert spec.checksum_algorithm == "sha256"
+        assert spec.checksum_value == "abc123def456"
+
+    def test_checksum_format_md5(self) -> None:
+        """DS-011: md5 checksum format is valid."""
+        spec = DownloadSpec(
+            url="https://example.com/file",
+            destination=Path("/tmp"),
+            checksum="md5:abc123",
+        )
+        assert spec.checksum_algorithm == "md5"
+        assert spec.checksum_value == "abc123"
+
+    def test_checksum_format_sha512(self) -> None:
+        """DS-012: sha512 checksum format is valid."""
+        spec = DownloadSpec(
+            url="https://example.com/file",
+            destination=Path("/tmp"),
+            checksum="sha512:abc123def456",
+        )
+        assert spec.checksum_algorithm == "sha512"
+        assert spec.checksum_value == "abc123def456"
+
+    def test_checksum_format_sha1(self) -> None:
+        """DS-013: sha1 checksum format is valid."""
+        spec = DownloadSpec(
+            url="https://example.com/file",
+            destination=Path("/tmp"),
+            checksum="sha1:abc123",
+        )
+        assert spec.checksum_algorithm == "sha1"
+        assert spec.checksum_value == "abc123"
+
+    def test_checksum_invalid_format_no_colon(self) -> None:
+        """DS-014: Checksum without colon raises ValueError."""
+        with pytest.raises(ValueError, match="checksum must be in format"):
+            DownloadSpec(
+                url="https://example.com/file",
+                destination=Path("/tmp"),
+                checksum="abc123",
+            )
+
+    def test_checksum_invalid_algorithm(self) -> None:
+        """DS-015: Unsupported checksum algorithm raises ValueError."""
+        with pytest.raises(ValueError, match="Unsupported checksum algorithm"):
+            DownloadSpec(
+                url="https://example.com/file",
+                destination=Path("/tmp"),
+                checksum="crc32:abc123",
+            )
+
+    def test_frozen_dataclass(self) -> None:
+        """DS-016: DownloadSpec is immutable."""
+        spec = DownloadSpec(
+            url="https://example.com/file",
+            destination=Path("/tmp"),
+        )
+        with pytest.raises(FrozenInstanceError):
+            spec.url = "https://other.com/file"  # type: ignore
+
+    def test_filename_property(self) -> None:
+        """DS-017: filename property extracts filename from URL."""
+        spec = DownloadSpec(
+            url="https://example.com/path/to/file.tar.gz",
+            destination=Path("/tmp"),
+        )
+        assert spec.filename == "file.tar.gz"
+
+    def test_filename_property_no_path(self) -> None:
+        """DS-018: filename property handles URL without path."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.gz",
+            destination=Path("/tmp"),
+        )
+        assert spec.filename == "file.tar.gz"
+
+    def test_checksum_properties_none_when_no_checksum(self) -> None:
+        """DS-019: Checksum properties return None when no checksum."""
+        spec = DownloadSpec(
+            url="https://example.com/file",
+            destination=Path("/tmp"),
+        )
+        assert spec.checksum_algorithm is None
+        assert spec.checksum_value is None
+
+
+class TestDownloadResult:
+    """Tests for DownloadResult dataclass."""
+
+    def test_create_success_result(self) -> None:
+        """DR-001: Create successful result."""
+        result = DownloadResult(
+            success=True,
+            path=Path("/tmp/downloaded-file"),
+            bytes_downloaded=100_000_000,
+            duration_seconds=10.5,
+            checksum_verified=True,
+        )
+
+        assert result.success is True
+        assert result.path == Path("/tmp/downloaded-file")
+        assert result.bytes_downloaded == 100_000_000
+        assert result.duration_seconds == 10.5
+        assert result.from_cache is False
+        assert result.checksum_verified is True
+        assert result.error_message is None
+
+    def test_create_failure_result(self) -> None:
+        """DR-002: Create failed result."""
+        result = DownloadResult(
+            success=False,
+            error_message="Connection refused",
+        )
+
+        assert result.success is False
+        assert result.path is None
+        assert result.bytes_downloaded == 0
+        assert result.error_message == "Connection refused"
+
+    def test_from_cache_flag(self) -> None:
+        """DR-003: from_cache flag works correctly."""
+        result = DownloadResult(
+            success=True,
+            path=Path("/tmp/cached-file"),
+            from_cache=True,
+        )
+
+        assert result.from_cache is True
+
+    def test_checksum_verified_flag(self) -> None:
+        """DR-004: checksum_verified flag works correctly."""
+        result = DownloadResult(
+            success=True,
+            path=Path("/tmp/file"),
+            checksum_verified=True,
+        )
+
+        assert result.checksum_verified is True
+
+    def test_download_speed_mbps_property(self) -> None:
+        """DR-005: download_speed_mbps computed property."""
+        # 100 MB in 10 seconds = 10 MB/s
+        result = DownloadResult(
+            success=True,
+            bytes_downloaded=104_857_600,  # 100 MB
+            duration_seconds=10.0,
+        )
+
+        assert result.download_speed_mbps is not None
+        assert abs(result.download_speed_mbps - 10.0) < 0.01
+
+    def test_download_speed_mbps_zero_duration(self) -> None:
+        """DR-006: download_speed_mbps returns None for zero duration."""
+        result = DownloadResult(
+            success=True,
+            bytes_downloaded=1000,
+            duration_seconds=0.0,
+        )
+
+        assert result.download_speed_mbps is None
+
+    def test_download_speed_mbps_zero_bytes(self) -> None:
+        """DR-007: download_speed_mbps returns None for zero bytes."""
+        result = DownloadResult(
+            success=True,
+            bytes_downloaded=0,
+            duration_seconds=10.0,
+        )
+
+        assert result.download_speed_mbps is None
+
+    def test_spec_reference(self) -> None:
+        """DR-008: Result can reference original spec."""
+        spec = DownloadSpec(
+            url="https://example.com/file.tar.gz",
+            destination=Path("/tmp"),
+        )
+        result = DownloadResult(
+            success=True,
+            path=Path("/tmp/file.tar.gz"),
+            spec=spec,
+        )
+
+        assert result.spec is spec
+        assert result.spec.url == "https://example.com/file.tar.gz"
+
+
+class TestGlobalConfigDownloadSettings:
+    """Tests for GlobalConfig download-related settings."""
+
+    def test_download_config_defaults(self) -> None:
+        """GC-D01: Download config has correct defaults."""
+        config = GlobalConfig()
+
+        assert config.download_cache_dir is None
+        assert config.download_max_retries == 3
+        assert config.download_retry_delay == 1.0
+        assert config.download_bandwidth_limit is None
+        assert config.download_max_concurrent == 2
+        assert config.download_timeout_seconds == 3600
+
+    def test_download_config_custom_values(self) -> None:
+        """GC-D02: Download config accepts custom values."""
+        config = GlobalConfig(
+            download_cache_dir=Path("/var/cache/update-all"),
+            download_max_retries=5,
+            download_retry_delay=2.0,
+            download_bandwidth_limit=1_000_000,  # 1 MB/s
+            download_max_concurrent=4,
+            download_timeout_seconds=7200,
+        )
+
+        assert config.download_cache_dir == Path("/var/cache/update-all")
+        assert config.download_max_retries == 5
+        assert config.download_retry_delay == 2.0
+        assert config.download_bandwidth_limit == 1_000_000
+        assert config.download_max_concurrent == 4
+        assert config.download_timeout_seconds == 7200

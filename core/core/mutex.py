@@ -17,9 +17,12 @@ import contextlib
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
+
+if TYPE_CHECKING:
+    from core.streaming import Phase
 
 logger = structlog.get_logger(__name__)
 
@@ -444,7 +447,23 @@ class MutexManager:
 
 # Standard mutex names for common resources
 class StandardMutexes:
-    """Standard mutex names for common resources."""
+    """Standard mutex names for common resources.
+
+    Mutex naming convention:
+    - pkgmgr:<name> - Package manager locks (apt, dpkg, snap, etc.)
+    - runtime:<name> - Language runtime updates (python, node, rust)
+    - app:<name> - Application-specific locks (firefox, vscode, etc.)
+    - system:<name> - System resources (network, disk)
+
+    Usage:
+        from core.mutex import StandardMutexes
+
+        @property
+        def mutexes(self) -> dict[Phase, list[str]]:
+            return {
+                Phase.EXECUTE: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+            }
+    """
 
     # Package manager locks
     APT_LOCK = "pkgmgr:apt"
@@ -456,11 +475,193 @@ class StandardMutexes:
     NPM_LOCK = "pkgmgr:npm"
     RUSTUP_LOCK = "pkgmgr:rustup"
 
+    # Additional package manager locks (Proposal 6)
+    CONDA_LOCK = "pkgmgr:conda"
+    TEXLIVE_LOCK = "pkgmgr:texlive"
+    MISE_LOCK = "pkgmgr:mise"
+    GEM_LOCK = "pkgmgr:gem"
+    BREW_LOCK = "pkgmgr:brew"
+
     # Runtime locks
     PYTHON_RUNTIME = "runtime:python"
     NODE_RUNTIME = "runtime:node"
     RUST_RUNTIME = "runtime:rust"
 
+    # Application locks (Proposal 6)
+    FIREFOX_LOCK = "app:firefox"
+    WATERFOX_LOCK = "app:waterfox"
+    CALIBRE_LOCK = "app:calibre"
+    VSCODE_LOCK = "app:vscode"
+    JETBRAINS_LOCK = "app:jetbrains"
+
     # System resources
     NETWORK = "system:network"
     DISK = "system:disk"
+
+    @classmethod
+    def all_mutexes(cls) -> list[str]:
+        """Return all defined mutex names.
+
+        Returns:
+            Sorted list of all mutex constant values.
+        """
+        return sorted(
+            value
+            for name, value in vars(cls).items()
+            if not name.startswith("_") and isinstance(value, str) and not callable(value)
+        )
+
+
+# =============================================================================
+# Helper Functions for Plugin Mutex/Dependency Collection (Proposal 6)
+# =============================================================================
+
+
+def collect_plugin_mutexes(
+    plugins: list,
+    phase: Phase | None = None,
+) -> dict[str, list[str]]:
+    """Collect mutexes from all plugins.
+
+    This function iterates over a list of plugins and collects their
+    mutex declarations. It can filter by phase or collect all mutexes.
+
+    Args:
+        plugins: List of plugin instances (must have `mutexes` property).
+        phase: Optional phase to filter mutexes. If None, collects all mutexes.
+
+    Returns:
+        Dictionary mapping plugin names to their mutex lists.
+
+    Example:
+        plugins = [apt_plugin, snap_plugin, pipx_plugin]
+        mutexes = collect_plugin_mutexes(plugins, Phase.EXECUTE)
+        # Returns: {"apt": ["pkgmgr:apt", "pkgmgr:dpkg"], "snap": ["pkgmgr:snap"], ...}
+    """
+
+    result: dict[str, list[str]] = {}
+
+    for plugin in plugins:
+        plugin_name = getattr(plugin, "name", str(plugin))
+        plugin_mutexes = getattr(plugin, "mutexes", {})
+
+        if phase is not None:
+            # Get mutexes for specific phase
+            result[plugin_name] = list(plugin_mutexes.get(phase, []))
+        else:
+            # Get all mutexes across all phases
+            all_mutexes: set[str] = set()
+            for phase_mutexes in plugin_mutexes.values():
+                all_mutexes.update(phase_mutexes)
+            result[plugin_name] = sorted(all_mutexes)
+
+    return result
+
+
+def collect_plugin_dependencies(plugins: list) -> dict[str, list[str]]:
+    """Collect dependencies from all plugins.
+
+    This function iterates over a list of plugins and collects their
+    dependency declarations.
+
+    Args:
+        plugins: List of plugin instances (must have `dependencies` property).
+
+    Returns:
+        Dictionary mapping plugin names to their dependency lists.
+
+    Example:
+        plugins = [apt_plugin, conda_packages_plugin, texlive_packages_plugin]
+        deps = collect_plugin_dependencies(plugins)
+        # Returns: {"apt": [], "conda-packages": ["conda-self"], ...}
+    """
+    result: dict[str, list[str]] = {}
+
+    for plugin in plugins:
+        plugin_name = getattr(plugin, "name", str(plugin))
+        plugin_deps = getattr(plugin, "dependencies", [])
+        result[plugin_name] = list(plugin_deps)
+
+    return result
+
+
+def build_dependency_graph(plugins: list) -> dict[str, set[str]]:
+    """Build a dependency graph from plugin declarations.
+
+    Creates a graph where each node is a plugin name and edges represent
+    dependencies (plugin A depends on plugin B means A -> B edge).
+
+    Args:
+        plugins: List of plugin instances.
+
+    Returns:
+        Dictionary mapping plugin names to sets of dependency names.
+
+    Example:
+        graph = build_dependency_graph(plugins)
+        # Returns: {"conda-packages": {"conda-self"}, "texlive-packages": {"texlive-self"}, ...}
+    """
+    return {
+        getattr(plugin, "name", str(plugin)): set(getattr(plugin, "dependencies", []))
+        for plugin in plugins
+    }
+
+
+def validate_dependencies(plugins: list) -> list[str]:
+    """Validate plugin dependencies for common issues.
+
+    Checks for:
+    - Circular dependencies
+    - Missing dependencies (plugin depends on non-existent plugin)
+    - Self-dependencies
+
+    Args:
+        plugins: List of plugin instances.
+
+    Returns:
+        List of error messages. Empty list means no issues found.
+
+    Example:
+        errors = validate_dependencies(plugins)
+        if errors:
+            for error in errors:
+                print(f"Dependency error: {error}")
+    """
+    errors: list[str] = []
+    plugin_names = {getattr(p, "name", str(p)) for p in plugins}
+    graph = build_dependency_graph(plugins)
+
+    for plugin_name, deps in graph.items():
+        # Check for self-dependency
+        if plugin_name in deps:
+            errors.append(f"Plugin '{plugin_name}' depends on itself")
+
+        # Check for missing dependencies
+        for dep in deps:
+            if dep not in plugin_names:
+                errors.append(f"Plugin '{plugin_name}' depends on non-existent plugin '{dep}'")
+
+    # Check for circular dependencies using DFS
+    visited: set[str] = set()
+    rec_stack: set[str] = set()
+
+    def has_cycle(node: str) -> bool:
+        visited.add(node)
+        rec_stack.add(node)
+
+        for neighbor in graph.get(node, set()):
+            if neighbor not in visited:
+                if has_cycle(neighbor):
+                    return True
+            elif neighbor in rec_stack:
+                errors.append(f"Circular dependency detected involving '{node}' and '{neighbor}'")
+                return True
+
+        rec_stack.remove(node)
+        return False
+
+    for plugin_name in graph:
+        if plugin_name not in visited:
+            has_cycle(plugin_name)
+
+    return errors

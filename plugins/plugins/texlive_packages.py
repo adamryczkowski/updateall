@@ -16,6 +16,8 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from core.mutex import StandardMutexes
+from core.streaming import Phase
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -53,6 +55,26 @@ class TexlivePackagesPlugin(BasePlugin):
         if tlmgr_path:
             return [tlmgr_path]
         return ["/usr/bin/tlmgr"]
+
+    @property
+    def dependencies(self) -> list[str]:
+        """Return list of plugins that must run before this one.
+
+        texlive-packages depends on texlive-self to ensure tlmgr
+        is up to date before updating packages.
+        """
+        return ["texlive-self"]
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Return mutexes required for each execution phase.
+
+        TeX Live packages update requires exclusive access to the TEXLIVE lock
+        during execution to prevent conflicts with self-update.
+        """
+        return {
+            Phase.EXECUTE: [StandardMutexes.TEXLIVE_LOCK],
+        }
 
     def is_available(self) -> bool:
         """Check if tlmgr is installed."""

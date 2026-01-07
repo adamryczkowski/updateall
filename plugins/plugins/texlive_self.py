@@ -20,6 +20,8 @@ import warnings
 from typing import TYPE_CHECKING
 
 from core.models import UpdateEstimate
+from core.mutex import StandardMutexes
+from core.streaming import Phase
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -57,6 +59,17 @@ class TexliveSelfPlugin(BasePlugin):
         if tlmgr_path:
             return [tlmgr_path]
         return ["/usr/bin/tlmgr"]
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Return mutexes required for each execution phase.
+
+        TeX Live self-update requires exclusive access to the TEXLIVE lock
+        during execution to prevent conflicts with package updates.
+        """
+        return {
+            Phase.EXECUTE: [StandardMutexes.TEXLIVE_LOCK],
+        }
 
     def is_available(self) -> bool:
         """Check if tlmgr is installed."""

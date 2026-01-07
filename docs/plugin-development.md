@@ -13,6 +13,7 @@ This guide explains how to create plugins for Update-All. Plugins extend Update-
   - [Version Checking Protocol](#version-checking-protocol) *(Recommended)*
 - [Advanced Topics](#advanced-topics)
   - [Plugins Requiring Sudo](#plugins-requiring-sudo)
+  - [Mutex and Dependency Declaration](#mutex-and-dependency-declaration)
   - [Multi-Step Updates](#multi-step-updates)
   - [Handling Non-Error Exit Codes](#handling-non-error-exit-codes)
   - [Custom Availability Checks](#custom-availability-checks)
@@ -1441,6 +1442,251 @@ async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
 ```
 
 However, this approach doesn't enable automatic sudoers generation or pre-execution validation.
+
+### Mutex and Dependency Declaration
+
+The **Mutex and Dependency Declaration API** enables plugins to declare resource locks (mutexes) and execution dependencies. This allows the orchestrator to:
+- Run plugins in parallel when they don't conflict
+- Ensure proper ordering when plugins depend on each other
+- Prevent resource contention (e.g., two plugins trying to use apt simultaneously)
+
+#### Why Use Mutex and Dependency Declaration?
+
+1. **Parallel execution** — Plugins without conflicting mutexes can run simultaneously
+2. **Resource protection** — Prevent conflicts when multiple plugins need the same resource
+3. **Explicit ordering** — Ensure plugins run in the correct sequence
+4. **Better scheduling** — The orchestrator can optimize execution order
+5. **Conflict detection** — Validate plugin configurations before execution
+
+#### `dependencies: list[str]`
+
+Override this property to declare which plugins must complete before this plugin runs:
+
+```python
+class TexlivePackagesPlugin(BasePlugin):
+    @property
+    def name(self) -> str:
+        return "texlive-packages"
+
+    @property
+    def command(self) -> str:
+        return "tlmgr"
+
+    @property
+    def dependencies(self) -> list[str]:
+        """Plugins that must run before this plugin.
+
+        TexLive packages require texlive-self to update tlmgr first.
+        """
+        return ["texlive-self"]
+```
+
+The orchestrator will ensure that `texlive-self` completes successfully before `texlive-packages` starts.
+
+#### `mutexes: dict[Phase, list[str]]`
+
+Override this property to declare which mutexes are required for each execution phase:
+
+```python
+from core.streaming import Phase
+from core.mutex import StandardMutexes
+
+class AptPlugin(BasePlugin):
+    @property
+    def name(self) -> str:
+        return "apt"
+
+    @property
+    def command(self) -> str:
+        return "apt"
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Mutexes required for each execution phase.
+
+        APT requires exclusive access to apt and dpkg locks during
+        both CHECK and EXECUTE phases.
+        """
+        return {
+            Phase.CHECK: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+            Phase.EXECUTE: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+        }
+```
+
+#### Execution Phases
+
+The `Phase` enum defines three execution phases:
+
+| Phase | Description | Typical Mutexes |
+|-------|-------------|-----------------|
+| `Phase.CHECK` | Checking for available updates | Package manager locks |
+| `Phase.DOWNLOAD` | Downloading update files | Network bandwidth |
+| `Phase.EXECUTE` | Applying updates | Package manager locks, application locks |
+
+```python
+from core.streaming import Phase
+
+# Example: Different mutexes for different phases
+@property
+def mutexes(self) -> dict[Phase, list[str]]:
+    return {
+        Phase.CHECK: [StandardMutexes.APT_LOCK],
+        Phase.DOWNLOAD: [StandardMutexes.NETWORK],
+        Phase.EXECUTE: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+    }
+```
+
+#### Standard Mutexes
+
+The `core.mutex` module provides predefined mutex constants:
+
+```python
+from core.mutex import StandardMutexes
+
+class StandardMutexes:
+    # Package manager locks
+    APT_LOCK = "apt"           # APT package manager
+    DPKG_LOCK = "dpkg"         # Debian package system
+    SNAP_LOCK = "snap"         # Snap package manager
+    FLATPAK_LOCK = "flatpak"   # Flatpak package manager
+    PIPX_LOCK = "pipx"         # pipx Python apps
+    NPM_LOCK = "npm"           # npm global packages
+    CARGO_LOCK = "cargo"       # Rust cargo
+    RUSTUP_LOCK = "rustup"     # Rustup toolchain
+
+    # Application-specific locks
+    TEXLIVE_LOCK = "texlive"   # TeX Live manager
+    CALIBRE_LOCK = "calibre"   # Calibre e-book manager
+    WATERFOX_LOCK = "waterfox" # Waterfox browser
+
+    # Resource locks
+    NETWORK = "network"        # Network bandwidth
+    DISK_IO = "disk_io"        # Disk I/O intensive operations
+    CPU_INTENSIVE = "cpu"      # CPU-intensive operations
+    MEMORY_INTENSIVE = "memory" # Memory-intensive operations
+```
+
+Use standard mutexes when possible for consistency. You can also define custom mutex names as strings.
+
+#### `all_mutexes: list[str]`
+
+This is a convenience property that returns all mutexes across all phases:
+
+```python
+plugin = AptPlugin()
+print(plugin.all_mutexes)  # ['apt', 'dpkg']
+```
+
+#### Real-World Examples
+
+##### APT Plugin (Package Manager Locks)
+
+```python
+class AptPlugin(BasePlugin):
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """APT requires apt and dpkg locks."""
+        return {
+            Phase.CHECK: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+            Phase.EXECUTE: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+        }
+```
+
+##### Waterfox Plugin (Network + Application Lock)
+
+```python
+class WaterfoxPlugin(BasePlugin):
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Waterfox needs network for download, app lock for install."""
+        return {
+            Phase.DOWNLOAD: [StandardMutexes.NETWORK],
+            Phase.EXECUTE: [StandardMutexes.WATERFOX_LOCK],
+        }
+```
+
+##### TexLive Packages Plugin (Dependency + Lock)
+
+```python
+class TexlivePackagesPlugin(BasePlugin):
+    @property
+    def dependencies(self) -> list[str]:
+        """Must run after texlive-self updates tlmgr."""
+        return ["texlive-self"]
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """TexLive package operations need exclusive access."""
+        return {
+            Phase.EXECUTE: [StandardMutexes.TEXLIVE_LOCK],
+        }
+```
+
+#### Helper Functions
+
+The `core.mutex` module provides helper functions for working with plugin mutexes:
+
+```python
+from core.mutex import (
+    collect_plugin_mutexes,
+    collect_plugin_dependencies,
+    build_dependency_graph,
+    validate_dependencies,
+)
+
+# Collect all mutexes from multiple plugins
+plugins = [AptPlugin(), SnapPlugin(), WaterfoxPlugin()]
+all_mutexes = collect_plugin_mutexes(plugins)
+# {'apt': ['apt', 'dpkg'], 'snap': ['snap'], 'waterfox': ['network', 'waterfox']}
+
+# Collect all dependencies
+dependencies = collect_plugin_dependencies(plugins)
+# {'apt': [], 'snap': [], 'waterfox': []}
+
+# Build a dependency graph for scheduling
+graph = build_dependency_graph(plugins)
+# {'apt': set(), 'snap': set(), 'texlive-packages': {'texlive-self'}}
+
+# Validate dependencies (check for cycles, missing plugins)
+errors = validate_dependencies(plugins)
+if errors:
+    for error in errors:
+        print(f"Error: {error}")
+```
+
+#### Scheduling with Mutexes
+
+The orchestrator uses mutex information to schedule plugins optimally:
+
+1. **No conflicts** — Plugins with disjoint mutexes run in parallel
+2. **Same mutex** — Plugins with overlapping mutexes run sequentially
+3. **Dependencies** — Dependent plugins wait for their dependencies
+
+Example scheduling:
+
+```
+Time →
+┌─────────────────────────────────────────────────────────────┐
+│ apt (apt, dpkg locks)                                       │
+├─────────────────────────────────────────────────────────────┤
+│ snap (snap lock)      │ flatpak (flatpak lock)              │
+│ (parallel with apt)   │ (parallel with snap)                │
+├─────────────────────────────────────────────────────────────┤
+│ texlive-self (texlive lock)                                 │
+├─────────────────────────────────────────────────────────────┤
+│ texlive-packages (texlive lock, depends on texlive-self)    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Fallback Behavior
+
+If a plugin doesn't override `dependencies` or `mutexes`, the base class provides sensible defaults:
+
+- `dependencies` → Returns `[]` (no dependencies)
+- `mutexes` → Returns `{}` (no mutexes, can run in parallel with anything)
+- `all_mutexes` → Returns `[]` (derived from empty mutexes)
+
+This ensures backward compatibility with existing plugins.
 
 ### Multi-Step Updates
 

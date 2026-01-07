@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.models import DownloadSpec, UpdateEstimate
+from core.mutex import StandardMutexes
+from core.streaming import Phase
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -82,6 +84,19 @@ class WaterfoxPlugin(BasePlugin):
             True - Waterfox plugin supports separate download.
         """
         return True
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Return mutexes required for each execution phase.
+
+        Waterfox requires:
+        - NETWORK mutex during DOWNLOAD phase (large binary download)
+        - WATERFOX_LOCK during EXECUTE phase (installation)
+        """
+        return {
+            Phase.DOWNLOAD: [StandardMutexes.NETWORK],
+            Phase.EXECUTE: [StandardMutexes.WATERFOX_LOCK],
+        }
 
     # Cache for remote version to avoid multiple API calls
     _cached_remote_version: str | None = None

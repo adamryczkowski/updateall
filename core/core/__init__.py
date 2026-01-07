@@ -38,6 +38,10 @@ from core.mutex import (
     MutexState,
     StandardMutexes,
     WaiterInfo,
+    build_dependency_graph,
+    collect_plugin_dependencies,
+    collect_plugin_mutexes,
+    validate_dependencies,
 )
 from core.notifications import (
     NotificationConfig,
@@ -186,6 +190,9 @@ __all__ = [
     "WaiterInfo",
     "YamlConfigLoader",
     "batched_stream",
+    "build_dependency_graph",
+    "collect_plugin_dependencies",
+    "collect_plugin_mutexes",
     "compare_versions",
     "get_config_dir",
     "get_default_config_path",
@@ -202,4 +209,5 @@ __all__ = [
     "safe_consume_stream",
     "set_metrics_collector",
     "timeout_stream",
+    "validate_dependencies",
 ]

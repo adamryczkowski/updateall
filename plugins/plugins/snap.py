@@ -6,6 +6,8 @@ import re
 from typing import TYPE_CHECKING
 
 from core.models import UpdateCommand
+from core.mutex import StandardMutexes
+from core.streaming import Phase
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -41,6 +43,16 @@ class SnapPlugin(BasePlugin):
         Snap requires sudo for refresh operations.
         """
         return ["/usr/bin/snap"]
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Return mutexes required for each execution phase.
+
+        Snap requires exclusive access to the SNAP lock during execution.
+        """
+        return {
+            Phase.EXECUTE: [StandardMutexes.SNAP_LOCK],
+        }
 
     def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
         """Get commands to refresh snaps.

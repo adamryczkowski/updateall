@@ -125,6 +125,72 @@ class BasePlugin(UpdatePlugin):
         """
         return len(self.sudo_commands) > 0
 
+    # =========================================================================
+    # Mutex and Dependency Declaration API (Proposal 6)
+    # =========================================================================
+
+    @property
+    def dependencies(self) -> list[str]:
+        """Plugin names that must run before this plugin.
+
+        Override this property to declare dependencies on other plugins.
+        The orchestrator will ensure dependent plugins complete successfully
+        before this plugin starts.
+
+        Returns:
+            List of plugin names that must complete before this plugin.
+            Return empty list if no dependencies.
+
+        Example:
+            @property
+            def dependencies(self) -> list[str]:
+                return ["conda-self"]  # Must run after conda-self
+        """
+        return []
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Mutexes required for each execution phase.
+
+        Override this property to declare mutex requirements per phase.
+        The orchestrator will acquire these mutexes before each phase
+        and release them after the phase completes.
+
+        Phases:
+            - Phase.CHECK: Version checking / update estimation
+            - Phase.DOWNLOAD: Downloading updates
+            - Phase.EXECUTE: Applying updates
+
+        Returns:
+            Dict mapping Phase to list of mutex names.
+            Return empty dict if no mutexes needed.
+
+        Example:
+            @property
+            def mutexes(self) -> dict[Phase, list[str]]:
+                return {
+                    Phase.DOWNLOAD: ["system:network"],
+                    Phase.EXECUTE: ["pkgmgr:apt", "pkgmgr:dpkg"],
+                }
+        """
+        return {}
+
+    @property
+    def all_mutexes(self) -> list[str]:
+        """Get all mutexes across all phases (convenience property).
+
+        This property returns a deduplicated, sorted list of all mutex
+        names declared across all phases. Useful for scheduling and
+        conflict detection.
+
+        Returns:
+            Sorted list of unique mutex names from all phases.
+        """
+        all_mutex_set: set[str] = set()
+        for phase_mutexes in self.mutexes.values():
+            all_mutex_set.update(phase_mutexes)
+        return sorted(all_mutex_set)
+
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.
 

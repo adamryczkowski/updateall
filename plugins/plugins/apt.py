@@ -6,6 +6,8 @@ import re
 from typing import TYPE_CHECKING
 
 from core.models import UpdateCommand
+from core.mutex import StandardMutexes
+from core.streaming import Phase
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -42,6 +44,19 @@ class AptPlugin(BasePlugin):
         APT requires sudo for both update and upgrade operations.
         """
         return ["/usr/bin/apt"]
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Return mutexes required for each execution phase.
+
+        APT requires exclusive access to APT and DPKG locks during
+        both CHECK and EXECUTE phases to prevent conflicts with
+        other package managers.
+        """
+        return {
+            Phase.CHECK: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+            Phase.EXECUTE: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+        }
 
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.

@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 import aiohttp
 
 from core.models import DownloadSpec, UpdateEstimate
+from core.mutex import StandardMutexes
 from core.streaming import (
     CompletionEvent,
     EventType,
@@ -95,6 +96,19 @@ class CalibrePlugin(BasePlugin):
             True - Calibre plugin supports separate download (installer script).
         """
         return True
+
+    @property
+    def mutexes(self) -> dict[Phase, list[str]]:
+        """Return mutexes required for each execution phase.
+
+        Calibre requires:
+        - NETWORK mutex during DOWNLOAD phase (large binary download)
+        - CALIBRE_LOCK during EXECUTE phase (installation)
+        """
+        return {
+            Phase.DOWNLOAD: [StandardMutexes.NETWORK],
+            Phase.EXECUTE: [StandardMutexes.CALIBRE_LOCK],
+        }
 
     # Installer script URL
     INSTALLER_URL = "https://download.calibre-ebook.com/linux-installer.sh"

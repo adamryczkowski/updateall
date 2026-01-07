@@ -9,6 +9,13 @@ This guide explains how to create plugins for Update-All. Plugins extend Update-
 - [Plugin Architecture](#plugin-architecture)
 - [API Reference](#api-reference)
 - [Advanced Topics](#advanced-topics)
+  - [Plugins Requiring Sudo](#plugins-requiring-sudo)
+  - [Multi-Step Updates](#multi-step-updates)
+  - [Handling Non-Error Exit Codes](#handling-non-error-exit-codes)
+  - [Custom Availability Checks](#custom-availability-checks)
+  - [Self-Update Support](#self-update-support-phase-3)
+  - [Plugin Dependencies](#plugin-dependencies)
+  - [Interactive Mode](#interactive-mode-phase-4)
 - [Streaming Output](#streaming-output)
 - [External Plugins](#external-plugins)
 - [Testing Plugins](#testing-plugins)
@@ -140,15 +147,27 @@ from plugins.mypkg import MyPkgPlugin
 
 # Add to __all__
 __all__ = [
-    # ... existing plugins ...
+    # ... existing plugins (AptPlugin, CargoPlugin, FlatpakPlugin, etc.) ...
     "MyPkgPlugin",
 ]
 
 def register_builtin_plugins(registry: PluginRegistry | None = None) -> PluginRegistry:
-    # ... existing registrations ...
+    """Register all built-in plugins with the registry."""
+    if registry is None:
+        registry = get_registry()
+
+    # Existing plugins are registered here...
+    # registry.register(AptPlugin)
+    # registry.register(CargoPlugin)
+    # etc.
+
+    # Add your plugin
     registry.register(MyPkgPlugin)
+
     return registry
 ```
+
+**Note:** The current built-in plugins include: `AptPlugin`, `CargoPlugin`, `FlatpakPlugin`, `NpmPlugin`, `PipxPlugin`, `RustupPlugin`, and `SnapPlugin`.
 
 ### Step 3: Test Your Plugin
 
@@ -178,8 +197,12 @@ plugins/
 │   ├── base.py          # BasePlugin class
 │   ├── registry.py      # Plugin registry
 │   ├── apt.py           # APT plugin
+│   ├── cargo.py         # Cargo (Rust) plugin
 │   ├── flatpak.py       # Flatpak plugin
+│   ├── npm.py           # npm plugin
 │   ├── pipx.py          # pipx plugin
+│   ├── rustup.py        # Rustup plugin
+│   ├── snap.py          # Snap plugin
 │   └── your_plugin.py   # Your new plugin
 ├── tests/
 │   ├── test_plugins.py
@@ -267,11 +290,21 @@ def metadata(self) -> PluginMetadata:
     )
 ```
 
+### Method Hierarchy
+
+The plugin system uses a layered architecture:
+
+1. **`execute(dry_run: bool) -> ExecutionResult`** — Public interface defined in `UpdatePlugin`. Called by the orchestrator.
+2. **`run_update(config: PluginConfig, dry_run: bool) -> PluginResult`** — Internal method in `BasePlugin` that handles availability checking, dry-run mode, and error handling.
+3. **`_execute_update(config: PluginConfig) -> tuple[str, str | None]`** — Abstract method you implement with your actual update logic.
+
+When you extend `BasePlugin`, you only need to implement `_execute_update()`. The base class handles everything else.
+
 ### Required Methods
 
 #### `_execute_update(config: PluginConfig) -> tuple[str, str | None]`
 
-The main update logic. Must be implemented by all plugins.
+The main update logic. Must be implemented by all plugins that extend `BasePlugin`.
 
 **Arguments:**
 - `config`: Plugin configuration with timeout, options, etc.
@@ -574,6 +607,49 @@ def metadata(self) -> PluginMetadata:
         name=self.name,
         dependencies=["apt"],  # Run after apt completes
     )
+```
+
+### Interactive Mode (Phase 4)
+
+Plugins can support interactive mode, which runs the update command in a PTY (pseudo-terminal) for full terminal emulation. This enables:
+- Interactive prompts (sudo password, confirmations)
+- Live progress display with ANSI escape sequences
+- Cursor movement and terminal control codes
+
+```python
+class MyInteractivePlugin(BasePlugin):
+    @property
+    def supports_interactive(self) -> bool:
+        """Enable interactive mode for this plugin."""
+        return True
+
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Return the command to run in interactive mode.
+
+        Args:
+            dry_run: If True, return a command that simulates the update.
+
+        Returns:
+            Command and arguments as a list.
+        """
+        if dry_run:
+            return ["/bin/bash", "-c", "mypkg update --dry-run"]
+        return ["/bin/bash", "-c", "mypkg update -y"]
+```
+
+For multi-step commands, use a shell wrapper:
+
+```python
+def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+    if dry_run:
+        return [
+            "/bin/bash", "-c",
+            "sudo apt update && sudo apt upgrade --dry-run"
+        ]
+    return [
+        "/bin/bash", "-c",
+        "sudo apt update && sudo apt upgrade -y"
+    ]
 ```
 
 ## Streaming Output

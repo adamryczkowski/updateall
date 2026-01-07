@@ -9,32 +9,44 @@ Plugin implementations for the update-all system.
 This package contains the plugin implementations for various package managers:
 
 * **apt** - Debian/Ubuntu package manager
-* **pipx** - Python application installer
+* **cargo** - Rust package manager (crates.io)
 * **flatpak** - Linux application sandboxing and distribution
+* **npm** - Node.js package manager (global packages)
+* **pipx** - Python application installer
+* **rustup** - Rust toolchain installer
+* **snap** - Canonical's universal package manager
 
 == Architecture
 
-Each plugin implements the `UpdatePlugin` interface from `update-all-core`:
+Each plugin extends the `BasePlugin` class from this package, which implements the `UpdatePlugin` interface from `update-all-core`:
 
 [source,python]
 ----
-from core.interfaces import UpdatePlugin
+from plugins.base import BasePlugin
 
-class AptPlugin(UpdatePlugin):
+class AptPlugin(BasePlugin):
     """Plugin for apt package manager."""
 
     @property
     def name(self) -> str:
         return "apt"
 
-    async def check_available(self) -> bool:
-        # Check if apt is available on the system
-        ...
+    @property
+    def command(self) -> str:
+        return "apt"
 
-    async def run_update(self, config: PluginConfig) -> PluginResult:
+    async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
         # Execute apt update && apt upgrade
+        # Returns (output, error_message) - error_message is None on success
         ...
 ----
+
+The `BasePlugin` class provides:
+
+* Automatic availability checking via `check_available()` (checks if `command` exists)
+* Command execution with timeout via `_run_command()`
+* Streaming support via `_run_command_streaming()`
+* Structured logging integration
 
 == Plugin Registry
 

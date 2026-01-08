@@ -6,8 +6,18 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import MagicMock
 
-from stats.estimator import PluginTimeEstimate, TimeEstimate, TimeEstimator
+import pandas as pd
+import pytest
+
+from stats.estimator import (
+    DartsTimeEstimator,
+    PluginTimeEstimate,
+    ResourceEstimate,
+    TimeEstimate,
+    TimeEstimator,
+)
 from stats.history import HistoryStore
 
 
@@ -304,3 +314,286 @@ class TestTimeEstimatorWithRealStore:
 
             assert estimate.point_estimate == TimeEstimator.DEFAULT_ESTIMATE_SECONDS
             assert estimate.data_points == 0
+
+
+class TestResourceEstimate:
+    """Tests for ResourceEstimate dataclass."""
+
+    def test_format_summary_basic(self) -> None:
+        """Test format_summary with basic data."""
+        estimate = ResourceEstimate(
+            plugin_name="apt",
+            wall_clock=TimeEstimate(
+                point_estimate=60.0,
+                confidence_interval=(50.0, 70.0),
+                confidence_level=0.9,
+                data_points=10,
+            ),
+        )
+
+        summary = estimate.format_summary()
+
+        assert "apt" in summary
+        assert "Time:" in summary
+        assert "historical" in summary  # model_based=False by default
+
+    def test_format_summary_model_based(self) -> None:
+        """Test format_summary with model-based estimate."""
+        estimate = ResourceEstimate(
+            plugin_name="apt",
+            wall_clock=TimeEstimate(
+                point_estimate=60.0,
+                confidence_interval=(50.0, 70.0),
+                confidence_level=0.9,
+                data_points=10,
+            ),
+            model_based=True,
+        )
+
+        summary = estimate.format_summary()
+
+        assert "model" in summary
+
+    def test_format_summary_with_all_metrics(self) -> None:
+        """Test format_summary with all metrics."""
+        estimate = ResourceEstimate(
+            plugin_name="apt",
+            wall_clock=TimeEstimate(
+                point_estimate=60.0,
+                confidence_interval=(50.0, 70.0),
+                confidence_level=0.9,
+                data_points=10,
+            ),
+            cpu_time=TimeEstimate(
+                point_estimate=30.0,
+                confidence_interval=(25.0, 35.0),
+                confidence_level=0.9,
+                data_points=10,
+            ),
+            memory_peak=TimeEstimate(
+                point_estimate=100 * 1024 * 1024,  # 100MB
+                confidence_interval=(80 * 1024 * 1024, 120 * 1024 * 1024),
+                confidence_level=0.9,
+                data_points=10,
+            ),
+            download_size=TimeEstimate(
+                point_estimate=50 * 1024 * 1024,  # 50MB
+                confidence_interval=(40 * 1024 * 1024, 60 * 1024 * 1024),
+                confidence_level=0.9,
+                data_points=10,
+            ),
+        )
+
+        summary = estimate.format_summary()
+
+        assert "Time:" in summary
+        assert "CPU:" in summary
+        assert "Memory:" in summary
+        assert "Download:" in summary
+
+
+class TestDartsTimeEstimator:
+    """Tests for DartsTimeEstimator class."""
+
+    @pytest.fixture
+    def mock_query(self) -> MagicMock:
+        """Create a mock HistoricalDataQuery."""
+        query = MagicMock()
+        query.get_plugin_names.return_value = ["apt", "flatpak"]
+        query.get_plugin_stats.return_value = None
+        return query
+
+    @pytest.fixture
+    def synthetic_data(self) -> pd.DataFrame:
+        """Generate synthetic plugin data for testing."""
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        num_samples = 100
+
+        start_date = datetime.now(tz=UTC) - timedelta(days=num_samples)
+        timestamps = [start_date + timedelta(days=i) for i in range(num_samples)]
+
+        wall_clock = 60.0 + rng.normal(0, 5, num_samples)
+        wall_clock = np.maximum(wall_clock, 1.0)
+
+        return pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "wall_clock_seconds": wall_clock,
+                "cpu_user_seconds": wall_clock * 0.5,
+                "memory_peak_bytes": (100 + rng.random(num_samples) * 50) * 1024 * 1024,
+                "download_size_bytes": (20 + rng.random(num_samples) * 30) * 1024 * 1024,
+                "packages_updated": rng.poisson(5, num_samples),
+                "packages_total": 100 + np.arange(num_samples) // 10,
+                "status": "success",
+            }
+        )
+
+    def test_estimate_no_model_no_stats(self, mock_query: MagicMock) -> None:
+        """Test estimation when no model and no stats available."""
+        estimator = DartsTimeEstimator(mock_query)
+
+        estimate = estimator.estimate("apt")
+
+        assert isinstance(estimate, ResourceEstimate)
+        assert estimate.plugin_name == "apt"
+        assert estimate.wall_clock.point_estimate == DartsTimeEstimator.DEFAULT_ESTIMATE_SECONDS
+        assert estimate.model_based is False
+
+    def test_estimate_with_stats(self, mock_query: MagicMock) -> None:
+        """Test estimation using historical stats."""
+        from stats.retrieval.queries import PluginStats
+
+        mock_query.get_plugin_stats.return_value = PluginStats(
+            plugin_name="apt",
+            execution_count=50,
+            success_count=48,
+            failure_count=2,
+            success_rate=0.96,
+            avg_wall_clock_seconds=65.0,
+            avg_cpu_seconds=30.0,
+            avg_download_bytes=50 * 1024 * 1024,
+            avg_memory_peak_bytes=100 * 1024 * 1024,
+            total_packages_updated=250,
+            first_execution=datetime.now(tz=UTC) - timedelta(days=90),
+            last_execution=datetime.now(tz=UTC),
+        )
+
+        estimator = DartsTimeEstimator(mock_query)
+
+        estimate = estimator.estimate("apt")
+
+        assert estimate.wall_clock.point_estimate == 65.0
+        assert estimate.cpu_time is not None
+        assert estimate.cpu_time.point_estimate == 30.0
+        assert estimate.model_based is False
+
+    def test_estimate_total_empty_list(self, mock_query: MagicMock) -> None:
+        """Test total estimation with empty plugin list."""
+        estimator = DartsTimeEstimator(mock_query)
+
+        estimate = estimator.estimate_total([])
+
+        assert estimate.plugin_name == "total"
+        assert estimate.wall_clock.point_estimate == 0.0
+
+    def test_estimate_total_multiple_plugins(self, mock_query: MagicMock) -> None:
+        """Test total estimation for multiple plugins."""
+        from stats.retrieval.queries import PluginStats
+
+        def get_stats(plugin_name: str, days: int = 90) -> PluginStats:  # noqa: ARG001
+            return PluginStats(
+                plugin_name=plugin_name,
+                execution_count=50,
+                success_count=48,
+                failure_count=2,
+                success_rate=0.96,
+                avg_wall_clock_seconds=60.0 if plugin_name == "apt" else 30.0,
+                avg_cpu_seconds=25.0,
+                avg_download_bytes=50 * 1024 * 1024,
+                avg_memory_peak_bytes=100 * 1024 * 1024,
+                total_packages_updated=250,
+                first_execution=datetime.now(tz=UTC) - timedelta(days=90),
+                last_execution=datetime.now(tz=UTC),
+            )
+
+        mock_query.get_plugin_stats.side_effect = get_stats
+
+        estimator = DartsTimeEstimator(mock_query)
+
+        estimate = estimator.estimate_total(["apt", "flatpak"])
+
+        assert estimate.plugin_name == "total"
+        # Total should be sum: 60 + 30 = 90
+        assert estimate.wall_clock.point_estimate == 90.0
+
+    def test_train_models(self, mock_query: MagicMock, synthetic_data: pd.DataFrame) -> None:
+        """Test training models for plugins."""
+        from stats.modeling.trainer import ModelType, TrainingConfig
+
+        mock_query.get_training_data_for_plugin.return_value = synthetic_data
+
+        # Use ExponentialSmoothing to avoid LightGBM dependency
+        config = TrainingConfig(
+            model_type=ModelType.EXPONENTIAL_SMOOTHING,
+            auto_select=False,
+        )
+        estimator = DartsTimeEstimator(mock_query, training_config=config)
+
+        results = estimator.train_models(["apt"])
+
+        assert "apt" in results
+        assert results["apt"] is True  # Training should succeed
+
+    def test_train_models_insufficient_data(self, mock_query: MagicMock) -> None:
+        """Test training with insufficient data."""
+        from stats.modeling.trainer import ModelType, TrainingConfig
+
+        # Return only 5 samples (below minimum)
+        mock_query.get_training_data_for_plugin.return_value = pd.DataFrame(
+            {
+                "timestamp": [datetime.now(tz=UTC) - timedelta(days=i) for i in range(5)],
+                "wall_clock_seconds": [60.0] * 5,
+            }
+        )
+
+        config = TrainingConfig(
+            model_type=ModelType.EXPONENTIAL_SMOOTHING,
+            auto_select=False,
+        )
+        estimator = DartsTimeEstimator(mock_query, training_config=config)
+
+        results = estimator.train_models(["apt"])
+
+        assert "apt" in results
+        assert results["apt"] is False  # Training should fail
+
+    def test_estimate_with_trained_model(
+        self, mock_query: MagicMock, synthetic_data: pd.DataFrame
+    ) -> None:
+        """Test estimation using trained model."""
+        from stats.modeling.trainer import ModelType, TrainingConfig
+
+        mock_query.get_training_data_for_plugin.return_value = synthetic_data
+
+        config = TrainingConfig(
+            model_type=ModelType.EXPONENTIAL_SMOOTHING,
+            auto_select=False,
+        )
+        estimator = DartsTimeEstimator(mock_query, training_config=config)
+        estimator.train_models(["apt"])
+
+        estimate = estimator.estimate("apt")
+
+        assert estimate.model_based is True
+        assert estimate.wall_clock.point_estimate > 0
+
+    def test_save_and_load_models(
+        self, mock_query: MagicMock, synthetic_data: pd.DataFrame
+    ) -> None:
+        """Test saving and loading models."""
+        from stats.modeling.trainer import ModelType, TrainingConfig
+
+        mock_query.get_training_data_for_plugin.return_value = synthetic_data
+
+        config = TrainingConfig(
+            model_type=ModelType.EXPONENTIAL_SMOOTHING,
+            auto_select=False,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            model_dir = Path(tmpdir) / "models"
+
+            # Train and save
+            estimator1 = DartsTimeEstimator(mock_query, model_dir=model_dir, training_config=config)
+            estimator1.train_models(["apt"])
+            estimator1.save_models()
+
+            # Load in new estimator
+            estimator2 = DartsTimeEstimator(mock_query, model_dir=model_dir, training_config=config)
+            estimator2.load_models()
+
+            # Should be able to make predictions
+            estimate = estimator2.estimate("apt")
+            assert estimate.model_based is True

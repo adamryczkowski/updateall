@@ -15,6 +15,12 @@ from stats.modeling.conformal import (
     compute_coverage,
     compute_interval_score,
 )
+from stats.modeling.multi_target import (
+    TARGET_COLUMNS,
+    MultiTargetModelManager,
+    MultiTargetTrainingResult,
+    PluginPrediction,
+)
 from stats.modeling.preprocessing import DataPreprocessor, PreprocessingConfig
 from stats.modeling.trainer import (
     ModelTrainer,
@@ -26,6 +32,7 @@ from stats.modeling.trainer import (
 from stats.modeling.validation import DataQualityReport, validate_training_data
 
 __all__ = [
+    "TARGET_COLUMNS",
     "ConformalConfig",
     "ConformalMethod",
     "ConformalPrediction",
@@ -34,6 +41,9 @@ __all__ = [
     "DataQualityReport",
     "ModelTrainer",
     "ModelType",
+    "MultiTargetModelManager",
+    "MultiTargetTrainingResult",
+    "PluginPrediction",
     "PredictionResult",
     "PreprocessingConfig",
     "TrainingConfig",

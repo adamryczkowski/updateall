@@ -3,3 +3,4 @@
 rouge
 crate
 MAPE
+mape

@@ -1,6 +1,6 @@
 [project]
 name = "update-all-stats"
-version = "0.6.0"
+version = "0.7.0"
 description = "Statistics and history tracking for update-all system"
 readme = "README.adoc"
 requires-python = ">=3.11"

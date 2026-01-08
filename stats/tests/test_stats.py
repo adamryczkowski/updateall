@@ -1,8 +1,13 @@
-"""Tests for stats components."""
+"""Tests for stats components.
+
+Note: HistoryStore tests have been moved to test_history.py.
+This file now focuses on StatsCalculator and UpdateStats tests.
+"""
 
 from __future__ import annotations
 
 import json
+import warnings
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -13,20 +18,28 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-class TestHistoryStore:
-    """Tests for HistoryStore."""
+class TestHistoryStoreLegacy:
+    """Legacy tests for HistoryStore (deprecated).
+
+    These tests verify backward compatibility of the deprecated HistoryStore.
+    New tests should use DuckDBHistoryStore - see test_history.py.
+    """
 
     def test_init_creates_file(self, tmp_path: Path) -> None:
         """Test that init creates the history file."""
         history_file = tmp_path / "history.json"
 
-        HistoryStore(history_file)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            HistoryStore(history_file)
 
         assert history_file.exists()
 
     def test_get_recent_runs_empty(self, tmp_path: Path) -> None:
         """Test getting recent runs from empty history."""
-        store = HistoryStore(tmp_path / "history.json")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(tmp_path / "history.json")
 
         runs = store.get_recent_runs()
 
@@ -34,7 +47,9 @@ class TestHistoryStore:
 
     def test_get_total_runs_empty(self, tmp_path: Path) -> None:
         """Test total runs count on empty history."""
-        store = HistoryStore(tmp_path / "history.json")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(tmp_path / "history.json")
 
         count = store.get_total_runs()
 
@@ -44,7 +59,9 @@ class TestHistoryStore:
         """Test clearing history."""
         history_file = tmp_path / "history.json"
         history_file.write_text('[{"id": "test"}]')
-        store = HistoryStore(history_file)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(history_file)
 
         store.clear_history()
 
@@ -60,7 +77,9 @@ class TestHistoryStore:
             {"id": "mid", "start_time": (now - timedelta(days=1)).isoformat()},
         ]
         history_file.write_text(json.dumps(history))
-        store = HistoryStore(history_file)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(history_file)
 
         runs = store.get_recent_runs(limit=3)
 
@@ -85,7 +104,9 @@ class TestHistoryStore:
             },
         ]
         history_file.write_text(json.dumps(history))
-        store = HistoryStore(history_file)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(history_file)
 
         runs = store.get_runs_by_plugin("apt")
 
@@ -102,7 +123,9 @@ class TestHistoryStore:
             {"id": "today", "start_time": now.isoformat()},
         ]
         history_file.write_text(json.dumps(history))
-        store = HistoryStore(history_file)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(history_file)
 
         runs = store.get_runs_in_range(now - timedelta(days=5), now)
 
@@ -116,7 +139,9 @@ class TestStatsCalculator:
 
     def test_calculate_stats_empty(self, tmp_path: Path) -> None:
         """Test calculating stats on empty history."""
-        store = HistoryStore(tmp_path / "history.json")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(tmp_path / "history.json")
         calc = StatsCalculator(store)
 
         stats = calc.calculate_stats(days=30)
@@ -152,7 +177,9 @@ class TestStatsCalculator:
             },
         ]
         history_file.write_text(json.dumps(history))
-        store = HistoryStore(history_file)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(history_file)
         calc = StatsCalculator(store)
 
         stats = calc.calculate_stats(days=30)
@@ -196,7 +223,9 @@ class TestStatsCalculator:
             },
         ]
         history_file.write_text(json.dumps(history))
-        store = HistoryStore(history_file)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            store = HistoryStore(history_file)
         calc = StatsCalculator(store)
 
         stats = calc.calculate_plugin_stats("apt", days=30)

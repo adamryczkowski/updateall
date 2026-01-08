@@ -164,6 +164,88 @@ class TestRunsRepository:
         assert len(runs) == 2
         assert all(r.hostname == "host-a" for r in runs)
 
+    def test_list_in_range(self, db_connection: DatabaseConnection) -> None:
+        """Test listing runs in a date range."""
+        repo = RunsRepository(db_connection.connect())
+
+        now = datetime.now(tz=UTC)
+        yesterday = now - timedelta(days=1)
+        two_days_ago = now - timedelta(days=2)
+
+        # Create runs at different times
+        run1 = Run(
+            run_id=uuid4(),
+            start_time=two_days_ago,
+            hostname="host",
+        )
+        run2 = Run(
+            run_id=uuid4(),
+            start_time=yesterday,
+            hostname="host",
+        )
+        run3 = Run(
+            run_id=uuid4(),
+            start_time=now,
+            hostname="host",
+        )
+
+        repo.create(run1)
+        repo.create(run2)
+        repo.create(run3)
+
+        # List runs from yesterday to now
+        runs = repo.list_in_range(yesterday, now)
+
+        assert len(runs) == 2
+        run_ids = {r.run_id for r in runs}
+        assert run2.run_id in run_ids
+        assert run3.run_id in run_ids
+        assert run1.run_id not in run_ids
+
+    def test_list_in_range_ordering(self, db_connection: DatabaseConnection) -> None:
+        """Test that list_in_range returns runs in descending order."""
+        repo = RunsRepository(db_connection.connect())
+
+        now = datetime.now(tz=UTC)
+        yesterday = now - timedelta(days=1)
+        two_hours_ago = now - timedelta(hours=2)
+
+        run1 = Run(run_id=uuid4(), start_time=yesterday, hostname="host")
+        run2 = Run(run_id=uuid4(), start_time=two_hours_ago, hostname="host")
+        run3 = Run(run_id=uuid4(), start_time=now, hostname="host")
+
+        repo.create(run1)
+        repo.create(run2)
+        repo.create(run3)
+
+        runs = repo.list_in_range(yesterday, now)
+
+        assert len(runs) == 3
+        # Should be ordered most recent first
+        assert runs[0].run_id == run3.run_id
+        assert runs[1].run_id == run2.run_id
+        assert runs[2].run_id == run1.run_id
+
+    def test_list_in_range_with_limit(self, db_connection: DatabaseConnection) -> None:
+        """Test list_in_range respects limit parameter."""
+        repo = RunsRepository(db_connection.connect())
+
+        now = datetime.now(tz=UTC)
+        yesterday = now - timedelta(days=1)
+
+        # Create 5 runs
+        for i in range(5):
+            run = Run(
+                run_id=uuid4(),
+                start_time=now - timedelta(hours=i),
+                hostname="host",
+            )
+            repo.create(run)
+
+        runs = repo.list_in_range(yesterday, now, limit=3)
+
+        assert len(runs) == 3
+
     def test_count_in_date_range(self, db_connection: DatabaseConnection) -> None:
         """Test counting runs in a date range."""
         repo = RunsRepository(db_connection.connect())

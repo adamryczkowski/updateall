@@ -1,33 +1,75 @@
 = Update-All Stats
 :toc:
 :toc-placement: preamble
+:source-highlighter: highlight.js
 
-Statistics and history tracking for the update-all system.
+Statistics, history tracking, and time estimation for the update-all system.
 
 == Overview
 
 This package provides:
 
-* **History storage** - Persistent storage of update run history
+* **History storage** - Persistent storage of update run history using DuckDB
 * **Statistics calculation** - Aggregate statistics over time
-* **Reporting** - Generate reports on update patterns
+* **Time estimation** - Predict execution time with confidence intervals using statistical models
+* **Data migration** - Tools to migrate from legacy JSON storage to DuckDB
+
+== Architecture
+
+The stats package uses a layered architecture:
+
+[source]
+----
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Stats Package                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────┐  │
+│  │  Estimator   │───>│   Queries    │───>│  MultiTargetModelManager │  │
+│  └──────────────┘    └──────────────┘    └──────────────────────────┘  │
+│         │                   │                        │                   │
+│         ▼                   ▼                        ▼                   │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────┐  │
+│  │   Collector   │───>│   DuckDB     │<───│     ModelTrainer         │  │
+│  │  (Ingestion)  │    │  (Storage)   │    │  (Darts + Conformal)     │  │
+│  └──────────────┘    └──────────────┘    └──────────────────────────┘  │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+----
 
 == Components
 
-=== HistoryStore
+=== DuckDBHistoryStore (Recommended)
 
-Persistent storage for update history:
+The recommended storage backend using DuckDB:
 
 [source,python]
 ----
-from stats.history import HistoryStore
+from stats.history import DuckDBHistoryStore
 
-store = HistoryStore()
+store = DuckDBHistoryStore()
 store.save_run(run_result)
 
 # Query history
 recent = store.get_recent_runs(limit=10)
 by_plugin = store.get_runs_by_plugin("apt")
+in_range = store.get_runs_in_range(start_date, end_date)
+----
+
+=== HistoryStore (Legacy - Deprecated)
+
+The original JSON-based storage is deprecated but still available for backward compatibility:
+
+[source,python]
+----
+from stats.history import HistoryStore
+
+# This will emit a DeprecationWarning
+store = HistoryStore()
+store.save_run(run_result)
+
+# Query history (delegates to DuckDB when available)
+recent = store.get_recent_runs(limit=10)
 ----
 
 === StatsCalculator
@@ -46,24 +88,225 @@ print(f"Success rate: {stats.success_rate:.1%}")
 print(f"Avg duration: {stats.avg_duration:.1f}s")
 ----
 
-=== Reporter
+=== DartsTimeEstimator
 
-Generate reports:
+Advanced time estimation using statistical models with confidence intervals:
 
 [source,python]
 ----
-from stats.reporter import Reporter
+from stats.estimator import DartsTimeEstimator
+from stats.retrieval.queries import HistoricalDataQuery
 
-reporter = Reporter(history_store)
-report = reporter.generate_weekly_report()
+query = HistoricalDataQuery()
+estimator = DartsTimeEstimator(query)
+
+# Train models for plugins
+estimator.train_models(["apt", "flatpak", "snap"])
+
+# Get estimate with confidence interval
+estimate = estimator.estimate("apt")
+print(estimate.format_summary())
+# Output: apt (model): Time: 45s (30s - 60s), CPU: 12s, Download: 50MB
+
+# Estimate total for multiple plugins
+total = estimator.estimate_total(["apt", "flatpak", "snap"])
+print(f"Total estimated time: {total.wall_clock.format()}")
+----
+
+=== TimeEstimator (Simple)
+
+Simple statistical estimator using historical averages:
+
+[source,python]
+----
+from stats.estimator import TimeEstimator
+from stats.history import DuckDBHistoryStore
+
+store = DuckDBHistoryStore()
+estimator = TimeEstimator(store)
+
+# Get estimate for a plugin
+estimate = estimator.estimate("apt")
+print(f"Estimated time: {estimate.format()}")
+# Output: 45s (30s - 60s)
 ----
 
 == Storage
 
-History is stored in JSON format at:
+=== DuckDB Database (Default)
+
+History is stored in a DuckDB database at:
+
+* Linux: `~/.local/share/update-all/history.duckdb`
+
+The database schema includes:
+
+* `runs` - Complete update-all execution sessions
+* `plugin_executions` - Individual plugin execution records
+* `step_metrics` - Detailed metrics for each execution step
+* `estimates` - Plugin-reported estimates for comparison
+
+=== Legacy JSON Storage (Deprecated)
+
+The legacy JSON storage location:
 
 * Linux: `~/.local/share/update-all/history.json`
-* macOS: `~/Library/Application Support/update-all/history.json`
+
+== Migration Guide
+
+=== Migrating from JSON to DuckDB
+
+If you have existing history in JSON format, you can migrate it to DuckDB:
+
+[source,python]
+----
+from stats.history import migrate_to_duckdb
+
+# Migrate using default paths
+result = migrate_to_duckdb()
+print(f"Migrated {result['runs_migrated']} runs")
+print(f"Migrated {result['executions_migrated']} plugin executions")
+
+if result['errors']:
+    print(f"Errors: {result['errors']}")
+----
+
+Or use the lower-level migration function for more control:
+
+[source,python]
+----
+from stats.ingestion.loader import migrate_json_history
+
+result = migrate_json_history(
+    json_path="/path/to/history.json",
+    db_path="/path/to/history.duckdb",
+    hostname="my-machine"
+)
+----
+
+=== Updating Your Code
+
+==== Before (Deprecated)
+
+[source,python]
+----
+from stats.history import HistoryStore
+
+store = HistoryStore()  # Uses JSON, emits DeprecationWarning
+store.save_run(run_result)
+----
+
+==== After (Recommended)
+
+[source,python]
+----
+from stats.history import DuckDBHistoryStore
+
+store = DuckDBHistoryStore()  # Uses DuckDB
+store.save_run(run_result)
+----
+
+The API is compatible, so most code will work without changes after updating the import.
+
+=== Exporting Data
+
+You can export data from DuckDB back to JSON format:
+
+[source,python]
+----
+from stats.ingestion.loader import export_to_json
+
+# Export all runs
+output_path = export_to_json()
+
+# Export with limit
+output_path = export_to_json(limit=100)
+----
+
+== Data Retrieval
+
+=== Query Interface
+
+The `HistoricalDataQuery` class provides rich querying capabilities:
+
+[source,python]
+----
+from stats.retrieval.queries import HistoricalDataQuery
+
+query = HistoricalDataQuery()
+
+# Get plugin statistics
+stats = query.get_plugin_stats("apt", days=90)
+print(f"Execution count: {stats.execution_count}")
+print(f"Success rate: {stats.success_rate:.1%}")
+print(f"Avg wall clock: {stats.avg_wall_clock_seconds:.1f}s")
+
+# Get training data for ML models
+df = query.get_training_data_for_plugin("apt", days=365)
+
+# Get all plugins summary
+summaries = query.get_all_plugins_summary(days=90)
+----
+
+=== Aggregations
+
+Get aggregated metrics over time:
+
+[source,python]
+----
+from stats.retrieval.aggregations import (
+    get_daily_aggregations,
+    get_plugin_performance_over_time,
+)
+
+# Daily aggregations
+daily = get_daily_aggregations(days=30)
+
+# Plugin performance over time
+performance = get_plugin_performance_over_time(
+    plugin_name="apt",
+    metric="wall_clock_seconds",
+    granularity="weekly",
+    days=90,
+)
+----
+
+== Statistical Modeling
+
+The stats package uses the Darts library for time series forecasting with conformal prediction for calibrated confidence intervals.
+
+=== Model Types
+
+The system automatically selects the appropriate model based on data availability:
+
+|===
+| Model | Use Case | Min Samples
+
+| ExponentialSmoothing | Baseline, few samples | 5
+| AutoARIMA | Trend + seasonality | 20
+| Prophet | Strong seasonality | 30
+| LightGBM | Many covariates | 50
+| NLinear | Long sequences | 100
+|===
+
+=== Training Models
+
+[source,python]
+----
+from stats.modeling.trainer import ModelTrainer, TrainingConfig, ModelType
+
+trainer = ModelTrainer(TrainingConfig(
+    model_type=ModelType.AUTO_ARIMA,
+    use_conformal=True,
+    conformal_alpha=0.1,  # 90% confidence interval
+))
+
+result = trainer.train("wall_clock", target_series)
+if result.is_successful:
+    prediction = trainer.predict("wall_clock")
+    print(f"Estimate: {prediction.point_estimate:.1f}s")
+    print(f"90% CI: [{prediction.lower_bound:.1f}, {prediction.upper_bound:.1f}]")
+----
 
 == Development
 
@@ -77,7 +320,19 @@ just test
 
 # Run linting
 just lint
+
+# Run all validation
+just validate
 ----
+
+== Dependencies
+
+* Python >= 3.11
+* DuckDB >= 1.4.0
+* Pandas >= 2.0.0
+* Darts >= 0.40.0
+* scikit-learn >= 1.3.0
+* structlog >= 24.0.0
 
 == License
 

@@ -254,6 +254,52 @@ class RunsRepository(BaseRepository[Run]):
             for row in results
         ]
 
+    def list_in_range(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        limit: int = 1000,
+    ) -> list[Run]:
+        """List runs within a date range.
+
+        Args:
+            start_date: Start of the date range (inclusive).
+            end_date: End of the date range (inclusive).
+            limit: Maximum number of runs to return.
+
+        Returns:
+            List of runs in the date range, ordered by start_time descending.
+        """
+        results = self._conn.execute(
+            """
+            SELECT run_id, start_time, end_time, hostname, username,
+                   config_hash, total_plugins, successful_plugins,
+                   failed_plugins, skipped_plugins, created_at
+            FROM runs
+            WHERE start_time >= ? AND start_time <= ?
+            ORDER BY start_time DESC
+            LIMIT ?
+            """,
+            [start_date, end_date, limit],
+        ).fetchall()
+
+        return [
+            Run(
+                run_id=UUID(row[0]),
+                start_time=row[1],
+                end_time=row[2],
+                hostname=row[3],
+                username=row[4],
+                config_hash=row[5],
+                total_plugins=row[6],
+                successful_plugins=row[7],
+                failed_plugins=row[8],
+                skipped_plugins=row[9],
+                created_at=row[10],
+            )
+            for row in results
+        ]
+
     def count_in_date_range(self, start_date: datetime, end_date: datetime) -> int:
         """Count runs within a date range.
 

@@ -1,6 +1,6 @@
 [project]
 name = "update-all-stats"
-version = "0.1.0"
+version = "0.2.0"
 description = "Statistics and history tracking for update-all system"
 readme = "README.adoc"
 requires-python = ">=3.11"
@@ -34,6 +34,7 @@ packages = [{ include = "stats" }]
 [tool.poetry.dependencies]
 python = "^3.11"
 update-all-core = { path = "../core", develop = true }
+duckdb = "^1.4.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
@@ -67,6 +68,13 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "TC001",  # Move application import into a type-checking block (tests need runtime imports)
+    "TC003",  # Move standard library import into a type-checking block (tests need runtime imports)
+    "SIM117", # Use a single `with` statement (nested context managers can be clearer in tests)
 ]
 
 [tool.ruff.lint.isort]

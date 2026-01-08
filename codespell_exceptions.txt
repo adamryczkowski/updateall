@@ -2,3 +2,4 @@
 # Add words that should be ignored by codespell (one per line)
 rouge
 crate
+MAPE

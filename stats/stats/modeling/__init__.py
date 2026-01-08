@@ -7,6 +7,14 @@ calibrated confidence intervals via conformal prediction.
 
 from __future__ import annotations
 
+from stats.modeling.conformal import (
+    ConformalConfig,
+    ConformalMethod,
+    ConformalPrediction,
+    ConformalPredictor,
+    compute_coverage,
+    compute_interval_score,
+)
 from stats.modeling.preprocessing import DataPreprocessor, PreprocessingConfig
 from stats.modeling.trainer import (
     ModelTrainer,
@@ -18,6 +26,10 @@ from stats.modeling.trainer import (
 from stats.modeling.validation import DataQualityReport, validate_training_data
 
 __all__ = [
+    "ConformalConfig",
+    "ConformalMethod",
+    "ConformalPrediction",
+    "ConformalPredictor",
     "DataPreprocessor",
     "DataQualityReport",
     "ModelTrainer",
@@ -26,5 +38,7 @@ __all__ = [
     "PreprocessingConfig",
     "TrainingConfig",
     "TrainingResult",
+    "compute_coverage",
+    "compute_interval_score",
     "validate_training_data",
 ]

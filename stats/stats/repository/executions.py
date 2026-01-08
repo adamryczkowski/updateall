@@ -131,11 +131,12 @@ class ExecutionsRepository(BaseRepository[PluginExecution]):
         if existing is None:
             raise ValueError(f"Execution with id {entity.execution_id} not found")
 
+        # Note: We don't update run_id or plugin_name as they are immutable
+        # after creation. DuckDB has limitations with foreign key constraints
+        # that prevent updating parent records with child records.
         self._conn.execute(
             """
             UPDATE plugin_executions SET
-                run_id = ?,
-                plugin_name = ?,
                 status = ?,
                 start_time = ?,
                 end_time = ?,
@@ -146,8 +147,6 @@ class ExecutionsRepository(BaseRepository[PluginExecution]):
             WHERE execution_id = ?
             """,
             [
-                str(entity.run_id),
-                entity.plugin_name,
                 entity.status.value,
                 entity.start_time,
                 entity.end_time,

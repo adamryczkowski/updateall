@@ -127,14 +127,13 @@ class RunsRepository(BaseRepository[Run]):
         if existing is None:
             raise ValueError(f"Run with id {entity.run_id} not found")
 
+        # Note: We don't update hostname, username, or config_hash as they are
+        # immutable after creation. DuckDB has limitations with foreign key
+        # constraints that prevent updating parent records with child records.
         self._conn.execute(
             """
             UPDATE runs SET
-                start_time = ?,
                 end_time = ?,
-                hostname = ?,
-                username = ?,
-                config_hash = ?,
                 total_plugins = ?,
                 successful_plugins = ?,
                 failed_plugins = ?,
@@ -142,11 +141,7 @@ class RunsRepository(BaseRepository[Run]):
             WHERE run_id = ?
             """,
             [
-                entity.start_time,
                 entity.end_time,
-                entity.hostname,
-                entity.username,
-                entity.config_hash,
                 entity.total_plugins,
                 entity.successful_plugins,
                 entity.failed_plugins,

@@ -82,6 +82,32 @@ class AptPlugin(BasePlugin):
             "sudo apt update && sudo apt upgrade -y",
         ]
 
+    def get_phase_commands(self, dry_run: bool = False) -> dict[Phase, list[str]]:
+        """Get commands for each execution phase.
+
+        APT phases:
+        - CHECK: Update package lists (apt update)
+        - DOWNLOAD: Download packages without installing (apt upgrade --download-only)
+        - EXECUTE: Install downloaded packages (apt upgrade -y)
+
+        Args:
+            dry_run: If True, return commands that simulate the update.
+
+        Returns:
+            Dict mapping Phase to command list.
+        """
+        if dry_run:
+            return {
+                Phase.CHECK: ["sudo", "apt", "update"],
+                Phase.EXECUTE: ["sudo", "apt", "upgrade", "--dry-run"],
+            }
+
+        return {
+            Phase.CHECK: ["sudo", "apt", "update"],
+            Phase.DOWNLOAD: ["sudo", "apt", "upgrade", "--download-only", "-y"],
+            Phase.EXECUTE: ["sudo", "apt", "upgrade", "-y"],
+        }
+
     def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
         """Get commands to update APT packages.
 

@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING
 
 from core.models import UpdateCommand
+from core.streaming import Phase
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -34,6 +35,49 @@ class CargoPlugin(BasePlugin):
     def description(self) -> str:
         """Return plugin description."""
         return "Rust Cargo package manager (requires cargo-update)"
+
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Get the shell command to run for interactive mode.
+
+        Returns a command that runs cargo install-update to update all
+        installed crates, showing live output in the terminal.
+
+        Args:
+            dry_run: If True, return a command that lists updates without applying.
+
+        Returns:
+            Command and arguments as a list.
+        """
+        if dry_run:
+            return ["cargo", "install-update", "-l"]
+        return ["cargo", "install-update", "-a"]
+
+    def get_phase_commands(self, dry_run: bool = False) -> dict[Phase, list[str]]:
+        """Get commands for each execution phase.
+
+        Cargo install-update phases:
+        - CHECK: List packages with updates available (-l flag)
+        - DOWNLOAD: Not supported separately by cargo-update (skipped)
+        - EXECUTE: Update all packages (-a flag)
+
+        Args:
+            dry_run: If True, return commands that simulate the update.
+
+        Returns:
+            Dict mapping Phase to command list.
+        """
+        if dry_run:
+            # In dry-run mode, only show CHECK phase
+            return {
+                Phase.CHECK: ["cargo", "install-update", "-l"],
+            }
+
+        # Normal mode: CHECK to list updates, then EXECUTE to apply them
+        # Note: cargo-update doesn't support separate download phase
+        return {
+            Phase.CHECK: ["cargo", "install-update", "-l"],
+            Phase.EXECUTE: ["cargo", "install-update", "-a"],
+        }
 
     async def check_available(self) -> bool:
         """Check if cargo and cargo-update are available."""

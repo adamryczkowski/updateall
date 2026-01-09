@@ -214,6 +214,68 @@ class BasePlugin(UpdatePlugin):
             return ["/bin/bash", "-c", f"echo '[{self.name}] Dry run - no changes made'"]
         return ["/bin/bash", "-c", f"echo '[{self.name}] No interactive command defined'"]
 
+    def get_phase_commands(self, dry_run: bool = False) -> dict[Phase, list[str]]:  # noqa: ARG002
+        """Get commands for each execution phase.
+
+        This method returns commands for each phase (CHECK, DOWNLOAD, EXECUTE)
+        to enable multi-phase execution with pause points between phases.
+
+        Override this method in subclasses to provide phase-specific commands.
+        If a phase is not applicable for a plugin, omit it from the returned dict.
+
+        The phases are:
+        - CHECK: Check for available updates (e.g., apt update, cargo install-update -l)
+        - DOWNLOAD: Download updates without installing (e.g., apt download)
+        - EXECUTE: Apply the updates (e.g., apt upgrade -y)
+
+        Args:
+            dry_run: If True, return commands that simulate the update.
+
+        Returns:
+            Dict mapping Phase to command list. Empty dict means use
+            get_interactive_command() for single-phase execution.
+
+        Example:
+            def get_phase_commands(self, dry_run: bool = False) -> dict[Phase, list[str]]:
+                if dry_run:
+                    return {
+                        Phase.CHECK: ["apt", "update"],
+                        Phase.EXECUTE: ["apt", "upgrade", "--dry-run"],
+                    }
+                return {
+                    Phase.CHECK: ["apt", "update"],
+                    Phase.DOWNLOAD: ["apt", "upgrade", "--download-only", "-y"],
+                    Phase.EXECUTE: ["apt", "upgrade", "-y"],
+                }
+        """
+        # Default: return empty dict to use single-phase execution
+        # Subclasses should override for multi-phase support
+        return {}
+
+    def get_phase_command(self, phase: Phase, dry_run: bool = False) -> list[str] | None:
+        """Get the command for a specific phase.
+
+        Convenience method to get the command for a single phase.
+
+        Args:
+            phase: The phase to get the command for.
+            dry_run: If True, return a command that simulates the update.
+
+        Returns:
+            Command list for the phase, or None if phase is not supported.
+        """
+        commands = self.get_phase_commands(dry_run=dry_run)
+        return commands.get(phase)
+
+    @property
+    def supports_phases(self) -> bool:
+        """Check if this plugin supports multi-phase execution.
+
+        Returns:
+            True if get_phase_commands() returns a non-empty dict.
+        """
+        return bool(self.get_phase_commands())
+
     async def check_available(self) -> bool:
         """Check if the plugin's command is available on the system."""
         return shutil.which(self.command) is not None

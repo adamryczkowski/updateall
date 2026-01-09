@@ -9,6 +9,9 @@ See docs/UI-revision-plan.md section 4 Phase 2
 
 UI Revision Plan - Phase 4 Hot Keys and CLI
 See docs/UI-revision-plan.md section 3.5 and 4 Phase 4
+
+Phase 1 - Core Infrastructure (PhaseController)
+See docs/UI-revision-plan.md section 4 Phase 1
 """
 
 from __future__ import annotations
@@ -27,8 +30,10 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
+from core.streaming import Phase
 from ui.input_router import InputRouter
 from ui.key_bindings import KeyBindings
+from ui.phase_controller import PhaseController  # PhaseResult, PhaseState not used directly
 from ui.phase_tab import (
     PHASE_TAB_CSS,
     DisplayPhase,
@@ -338,6 +343,13 @@ class InteractiveTabbedApp(App[None]):
         # Phase control state (Phase 4 - Hot Keys and CLI)
         self._pause_enabled = pause_phases
 
+        # Phase controller for multi-phase execution (Phase 1 - Core Infrastructure)
+        # See docs/UI-revision-plan.md section 4 Phase 1
+        self._phase_controller = PhaseController(
+            plugins=plugins,
+            pause_between_phases=pause_phases,
+        )
+
         # Stats estimates for projected download sizes
         self._plugin_estimates: dict[str, ResourceEstimate] = {}
 
@@ -497,26 +509,49 @@ class InteractiveTabbedApp(App[None]):
         # Clean up terminal panes
         await TerminalPane.cleanup_session_manager()
 
-    def _get_plugin_command(self, plugin: UpdatePlugin) -> list[str]:
+    def _get_plugin_command(
+        self,
+        plugin: UpdatePlugin,
+        phase: Phase | None = None,
+    ) -> list[str]:
         """Get the command to run for a plugin.
 
         Args:
             plugin: The plugin.
+            phase: Optional phase to get command for. If None, tries
+                   get_interactive_command() first for backward compatibility,
+                   then falls back to phase commands.
 
         Returns:
             Command and arguments as a list.
         """
-        # Check if plugin supports interactive mode
+        # If a specific phase is requested, get the phase-specific command
+        if phase is not None:
+            command = self._phase_controller.get_phase_command(plugin.name, phase)
+            if command:
+                return command
+
+        # Try get_interactive_command() first for backward compatibility
+        # This is the primary method for plugins that don't use multi-phase execution
         if hasattr(plugin, "get_interactive_command"):
             try:
                 return plugin.get_interactive_command(dry_run=self.dry_run)
             except NotImplementedError:
                 pass
 
-        # Fall back to a shell that runs the plugin's execute method
-        # This is a placeholder - in practice, plugins should implement
-        # get_interactive_command() for proper interactive support
-        return ["/bin/bash", "-c", f"echo 'Running {plugin.name}...' && sleep 2 && echo 'Done'"]
+        # Fall back to phase commands for multi-phase plugins
+        current_phase = self._phase_controller.get_current_phase(plugin.name)
+        if current_phase:
+            command = self._phase_controller.get_phase_command(plugin.name, current_phase)
+            if command:
+                return command
+
+        # Last resort: echo a message indicating no command is defined
+        return [
+            "/bin/bash",
+            "-c",
+            f"echo '[{plugin.name}] No interactive command defined'",
+        ]
 
     async def _check_and_authenticate_sudo(self) -> None:
         """Check sudo status and authenticate if needed."""
@@ -548,11 +583,14 @@ class InteractiveTabbedApp(App[None]):
             self.notify("Sudo password may be required", severity="warning")
 
     async def _start_all_plugins(self) -> None:
-        """Start all plugin PTY sessions.
+        """Start all plugin PTY sessions with phase-based execution.
 
         If pause_phases is enabled, plugins will be set to PAUSED state
         instead of starting immediately. Users can then manually start
         each plugin or resume all.
+
+        This method uses the PhaseController to manage phase transitions
+        and execute phase-specific commands for each plugin.
         """
         for plugin_name, pane in self.terminal_panes.items():
             tab_data = self.tab_data[plugin_name]
@@ -564,6 +602,7 @@ class InteractiveTabbedApp(App[None]):
                 tab_data.state = PaneState.EXITED
                 tab_data.error_message = "Plugin is disabled"
                 tab_data.tab_status = TabStatus.LOCKED
+                self._phase_controller.skip_plugin(plugin_name, "Plugin is disabled")
                 self._update_tab_visual(plugin_name, tab_data)
                 self._update_progress()
                 continue
@@ -583,6 +622,10 @@ class InteractiveTabbedApp(App[None]):
                     tab_data.end_time = datetime.now(tz=UTC)
                     tab_data.tab_status = TabStatus.LOCKED
                     tab_data.current_phase = DisplayPhase.NOT_APPLICABLE
+                    self._phase_controller.skip_plugin(
+                        plugin_name,
+                        "Required tools not installed",
+                    )
 
                     # Display message in the terminal view
                     if pane.terminal_view:
@@ -610,15 +653,20 @@ class InteractiveTabbedApp(App[None]):
                 tab_data.current_phase = DisplayPhase.PENDING
                 tab_data.tab_status = TabStatus.PENDING
 
+                # Get the first phase for this plugin
+                first_phase = self._phase_controller.get_current_phase(plugin_name)
+                phase_name = first_phase.value if first_phase else "CHECK"
+
                 # Display pause message in the terminal view
                 if pane.terminal_view:
                     pause_msg = (
                         f"\r\n\x1b[36m╭─ Paused ────────────────────────────────────╮\x1b[0m\r\n"
                         f"\x1b[36m│\x1b[0m Plugin: {plugin_name}\r\n"
+                        f"\x1b[36m│\x1b[0m Next Phase: {phase_name}\r\n"
                         f"\x1b[36m│\x1b[0m\r\n"
                         f"\x1b[36m│\x1b[0m Waiting for user to start.\r\n"
-                        f"\x1b[36m│\x1b[0m Press Ctrl+P to toggle pause mode,\r\n"
-                        f"\x1b[36m│\x1b[0m or Ctrl+R to start this plugin.\r\n"
+                        f"\x1b[36m│\x1b[0m Press Ctrl+R to start this phase.\r\n"
+                        f"\x1b[36m│\x1b[0m Press Ctrl+P to toggle auto-pause.\r\n"
                         f"\x1b[36m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
                     )
                     pane.terminal_view.feed(pause_msg.encode("utf-8"))
@@ -627,34 +675,127 @@ class InteractiveTabbedApp(App[None]):
                 self._update_progress()
                 continue
 
-            # Start the pane with error handling
-            tab_data.start_time = datetime.now(tz=UTC)
-            try:
-                await pane.start()
-            except Exception as e:
-                # Handle startup errors gracefully - display in the tab
-                error_msg = str(e)
-                tab_data.state = PaneState.FAILED
-                tab_data.error_message = error_msg
+            # Start the first phase for this plugin
+            await self._start_plugin_phase(plugin_name)
+
+    async def _start_plugin_phase(self, plugin_name: str) -> None:
+        """Start the current phase for a plugin.
+
+        This method gets the current phase command from the PhaseController
+        and starts the PTY session with that command.
+
+        Args:
+            plugin_name: Name of the plugin to start.
+        """
+        pane = self.terminal_panes.get(plugin_name)
+        tab_data = self.tab_data.get(plugin_name)
+
+        if not pane or not tab_data:
+            return
+
+        # Get the current phase and command
+        current_phase = self._phase_controller.get_current_phase(plugin_name)
+        if not current_phase:
+            # No more phases - plugin is complete
+            tab_data.state = PaneState.SUCCESS
+            tab_data.end_time = datetime.now(tz=UTC)
+            tab_data.current_phase = DisplayPhase.COMPLETE
+            tab_data.tab_status = TabStatus.SUCCESS
+            self._update_tab_visual(plugin_name, tab_data)
+            self._update_progress()
+            pane.post_message(PaneStateChanged(plugin_name, PaneState.SUCCESS))
+            return
+
+        # Get the command for this phase
+        command = self._phase_controller.get_phase_command(plugin_name, current_phase)
+        if not command:
+            # No command for this phase - mark as skipped and move to next
+            # We need to start the phase first so the result exists
+            self._phase_controller.start_phase_sync(plugin_name, current_phase)
+            # Mark as skipped (not completed) to indicate no command was run
+            state = self._phase_controller.plugin_states.get(plugin_name)
+            if state and current_phase in state.phase_results:
+                from ui.phase_controller import PhaseState
+
+                state.phase_results[current_phase].state = PhaseState.SKIPPED
+
+            # Check for next phase (don't recurse infinitely)
+            next_phase = self._phase_controller.get_current_phase(plugin_name)
+            if next_phase and next_phase != current_phase:
+                await self._start_plugin_phase(plugin_name)
+            else:
+                # No more phases or stuck on same phase - mark as complete
+                tab_data.state = PaneState.SUCCESS
                 tab_data.end_time = datetime.now(tz=UTC)
-
-                # Display error in the terminal view
-                if pane.terminal_view:
-                    error_display = (
-                        f"\r\n\x1b[31m╭─ Error ─────────────────────────────────────╮\x1b[0m\r\n"
-                        f"\x1b[31m│\x1b[0m Failed to start plugin: {plugin_name}\r\n"
-                        f"\x1b[31m│\x1b[0m\r\n"
-                        f"\x1b[31m│\x1b[0m {error_msg}\r\n"
-                        f"\x1b[31m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
-                    )
-                    pane.terminal_view.feed(error_display.encode("utf-8"))
-
-                # Update tab visual and progress
+                tab_data.current_phase = DisplayPhase.COMPLETE
+                tab_data.tab_status = TabStatus.COMPLETED
                 self._update_tab_visual(plugin_name, tab_data)
                 self._update_progress()
+            return
 
-                # Post state change message
-                pane.post_message(PaneStateChanged(plugin_name, PaneState.FAILED))
+        # Update pane command and start
+        pane.command = command
+
+        # Map Phase to DisplayPhase
+        phase_display_map = {
+            Phase.CHECK: DisplayPhase.UPDATE,
+            Phase.DOWNLOAD: DisplayPhase.DOWNLOAD,
+            Phase.EXECUTE: DisplayPhase.UPGRADE,
+        }
+        tab_data.current_phase = phase_display_map.get(current_phase, DisplayPhase.UPDATE)
+        tab_data.tab_status = TabStatus.RUNNING
+        tab_data.state = PaneState.RUNNING
+
+        # Display phase start message
+        if pane.terminal_view:
+            phase_msg = (
+                f"\r\n\x1b[32m╭─ Phase: {current_phase.value} ─────────────────────────╮\x1b[0m\r\n"
+                f"\x1b[32m│\x1b[0m Command: {' '.join(command)}\r\n"
+                f"\x1b[32m╰─────────────────────────────────────────────╯\x1b[0m\r\n\r\n"
+            )
+            pane.terminal_view.feed(phase_msg.encode("utf-8"))
+
+        self._update_tab_visual(plugin_name, tab_data)
+
+        # Start the phase in the PhaseController
+        self._phase_controller.start_phase_sync(plugin_name, current_phase)
+
+        # Start the pane with error handling
+        if not tab_data.start_time:
+            tab_data.start_time = datetime.now(tz=UTC)
+
+        try:
+            await pane.start()
+        except Exception as e:
+            # Handle startup errors gracefully - display in the tab
+            error_msg = str(e)
+            tab_data.state = PaneState.FAILED
+            tab_data.error_message = error_msg
+            tab_data.end_time = datetime.now(tz=UTC)
+            self._phase_controller.complete_phase_sync(
+                plugin_name,
+                current_phase,
+                success=False,
+                error=error_msg,
+            )
+
+            # Display error in the terminal view
+            if pane.terminal_view:
+                error_display = (
+                    f"\r\n\x1b[31m╭─ Error ─────────────────────────────────────╮\x1b[0m\r\n"
+                    f"\x1b[31m│\x1b[0m Failed to start plugin: {plugin_name}\r\n"
+                    f"\x1b[31m│\x1b[0m\r\n"
+                    f"\x1b[31m│\x1b[0m {error_msg}\r\n"
+                    f"\x1b[31m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                )
+                pane.terminal_view.feed(error_display.encode("utf-8"))
+
+            # Update tab visual and progress
+            self._update_tab_visual(plugin_name, tab_data)
+            self._update_progress()
+
+            # Post state change message
+            pane.post_message(PaneStateChanged(plugin_name, PaneState.FAILED))
 
     def _update_active_pane(self) -> None:
         """Update which pane is marked as active."""
@@ -731,40 +872,104 @@ class InteractiveTabbedApp(App[None]):
                 pass
 
     @on(PaneStateChanged)
-    def handle_pane_state_changed(self, message: PaneStateChanged) -> None:
+    async def handle_pane_state_changed(self, message: PaneStateChanged) -> None:
         """Handle pane state change messages.
 
         Updates the tab data, visual status, and progress bar when a pane's
-        state changes. This is part of Phase 2 Visual Enhancements.
+        state changes. This method also handles phase transitions using the
+        PhaseController.
 
         Args:
             message: The state change message.
         """
         plugin_name = message.pane_id
-        if plugin_name in self.tab_data:
-            tab_data = self.tab_data[plugin_name]
-            tab_data.state = message.state
-            tab_data.exit_code = message.exit_code
+        if plugin_name not in self.tab_data:
+            return
 
-            if message.state in (PaneState.SUCCESS, PaneState.FAILED, PaneState.EXITED):
+        tab_data = self.tab_data[plugin_name]
+        tab_data.state = message.state
+        tab_data.exit_code = message.exit_code
+
+        # Get current phase from PhaseController
+        current_phase = self._phase_controller.get_current_phase(plugin_name)
+
+        # Handle phase completion
+        if message.state == PaneState.SUCCESS:
+            # Phase completed successfully
+            if current_phase:
+                self._phase_controller.complete_phase_sync(
+                    plugin_name,
+                    current_phase,
+                    success=True,
+                )
+
+                # Check if there are more phases
+                next_phase = self._phase_controller.get_current_phase(plugin_name)
+                if next_phase:
+                    # More phases to run
+                    if self._pause_enabled:
+                        # Pause before next phase
+                        tab_data.state = PaneState.IDLE
+                        pane = self.terminal_panes.get(plugin_name)
+                        if pane and pane.terminal_view:
+                            pause_msg = (
+                                f"\r\n\x1b[36m╭─ Phase Complete ────────────────────────────╮\x1b[0m\r\n"
+                                f"\x1b[36m│\x1b[0m Completed: {current_phase.value}\r\n"
+                                f"\x1b[36m│\x1b[0m Next Phase: {next_phase.value}\r\n"
+                                f"\x1b[36m│\x1b[0m\r\n"
+                                f"\x1b[36m│\x1b[0m Press Ctrl+R to continue.\r\n"
+                                f"\x1b[36m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                            )
+                            pane.terminal_view.feed(pause_msg.encode("utf-8"))
+
+                        # Update display phase to show next phase is pending
+                        phase_display_map = {
+                            Phase.CHECK: DisplayPhase.UPDATE,
+                            Phase.DOWNLOAD: DisplayPhase.DOWNLOAD,
+                            Phase.EXECUTE: DisplayPhase.UPGRADE,
+                        }
+                        tab_data.current_phase = phase_display_map.get(
+                            next_phase,
+                            DisplayPhase.PENDING,
+                        )
+                        tab_data.tab_status = TabStatus.PENDING
+                        self._update_tab_visual(plugin_name, tab_data)
+                        return
+                    else:
+                        # Auto-continue to next phase
+                        await self._start_plugin_phase(plugin_name)
+                        return
+                else:
+                    # All phases complete
+                    tab_data.current_phase = DisplayPhase.COMPLETE
+                    tab_data.end_time = datetime.now(tz=UTC)
+            else:
+                # No phase tracking - just mark as complete
+                tab_data.current_phase = DisplayPhase.COMPLETE
                 tab_data.end_time = datetime.now(tz=UTC)
 
-            # Phase 2: Update tab status based on pane state
-            new_status = determine_tab_status(message.state.value)
-            old_status = tab_data.tab_status
-            tab_data.tab_status = new_status
+        elif message.state == PaneState.FAILED:
+            # Phase failed
+            if current_phase:
+                self._phase_controller.complete_phase_sync(
+                    plugin_name,
+                    current_phase,
+                    success=False,
+                    error=tab_data.error_message,
+                )
+            tab_data.end_time = datetime.now(tz=UTC)
 
-            # Update display phase based on state
-            if message.state == PaneState.SUCCESS:
-                tab_data.current_phase = DisplayPhase.COMPLETE
-            elif message.state == PaneState.RUNNING:
-                # When running, show UPDATE phase (CHECK in core terms)
-                # This will be enhanced in Phase 1 with PhaseController
-                tab_data.current_phase = DisplayPhase.UPDATE
+        elif message.state == PaneState.EXITED:
+            tab_data.end_time = datetime.now(tz=UTC)
 
-            # Update the tab's visual appearance if status changed
-            if new_status != old_status:
-                self._update_tab_visual(plugin_name, tab_data)
+        # Update tab status based on pane state
+        new_status = determine_tab_status(message.state.value)
+        old_status = tab_data.tab_status
+        tab_data.tab_status = new_status
+
+        # Update the tab's visual appearance if status changed
+        if new_status != old_status:
+            self._update_tab_visual(plugin_name, tab_data)
 
         # Update progress
         self._update_progress()
@@ -993,10 +1198,15 @@ class InteractiveTabbedApp(App[None]):
                 pane.metrics_collector._metrics.pause_after_phase = self._pause_enabled
 
     async def action_retry_phase(self) -> None:
-        """Retry the current phase or start a paused plugin.
+        """Retry the current phase or start/continue a paused plugin.
 
-        This restarts the PTY session for the active pane if it has failed,
-        or starts the plugin if it's in IDLE state (paused by --pause-phases).
+        This method handles:
+        - Starting a paused plugin (IDLE state with pause_phases enabled)
+        - Continuing to the next phase after a phase completes
+        - Retrying a failed phase
+
+        Uses the PhaseController to manage phase transitions and get
+        phase-specific commands.
         """
         if not self.active_pane:
             self.notify("No active pane", severity="warning")
@@ -1014,39 +1224,56 @@ class InteractiveTabbedApp(App[None]):
             self.notify("Plugin is not applicable or disabled", severity="warning")
             return
 
-        # Handle failed state - retry
+        # Get current phase from PhaseController
+        current_phase = self._phase_controller.get_current_phase(plugin_name)
+
+        # Handle failed state - retry the current phase
         if self.active_pane.state == PaneState.FAILED:
-            # Reset state
+            if current_phase:
+                # Reset the phase state in PhaseController
+                self._phase_controller.reset_phase(plugin_name, current_phase)
+
+            # Reset tab data
             tab_data.state = PaneState.IDLE
             tab_data.exit_code = None
             tab_data.error_message = None
             tab_data.end_time = None
-            tab_data.current_phase = DisplayPhase.PENDING
-            tab_data.tab_status = TabStatus.PENDING
 
-            # Restart the pane
-            tab_data.start_time = datetime.now(tz=UTC)
-            await self.active_pane.start()
-            self.notify("Retrying phase...")
-            self._update_tab_visual(plugin_name, tab_data)
+            # Start the phase using PhaseController
+            await self._start_plugin_phase(plugin_name)
+            self.notify(f"Retrying {current_phase.value if current_phase else 'phase'}...")
             return
 
-        # Handle idle state - start paused plugin
+        # Handle idle state - start paused plugin or continue to next phase
         if self.active_pane.state == PaneState.IDLE:
-            # Start the plugin
-            tab_data.start_time = datetime.now(tz=UTC)
-            tab_data.current_phase = DisplayPhase.UPDATE
-            tab_data.tab_status = TabStatus.RUNNING
-            await self.active_pane.start()
-            self.notify(f"Starting {plugin_name}...")
-            self._update_tab_visual(plugin_name, tab_data)
+            if current_phase:
+                # Start the current phase
+                await self._start_plugin_phase(plugin_name)
+                self.notify(f"Starting {current_phase.value} phase for {plugin_name}...")
+            else:
+                # No more phases - plugin is complete
+                tab_data.state = PaneState.SUCCESS
+                tab_data.end_time = datetime.now(tz=UTC)
+                tab_data.current_phase = DisplayPhase.COMPLETE
+                tab_data.tab_status = TabStatus.SUCCESS
+                self._update_tab_visual(plugin_name, tab_data)
+                self._update_progress()
+                self.notify(f"{plugin_name} completed all phases")
             return
 
-        # Already running or completed
+        # Handle success state - check if there are more phases
+        if self.active_pane.state == PaneState.SUCCESS:
+            if current_phase:
+                # There are more phases to run
+                await self._start_plugin_phase(plugin_name)
+                self.notify(f"Starting {current_phase.value} phase...")
+            else:
+                self.notify("Plugin already completed all phases", severity="information")
+            return
+
+        # Already running
         if self.active_pane.state == PaneState.RUNNING:
             self.notify("Plugin is already running", severity="information")
-        elif self.active_pane.state == PaneState.SUCCESS:
-            self.notify("Plugin already completed successfully", severity="information")
         else:
             self.notify("No action available for current state", severity="warning")
 

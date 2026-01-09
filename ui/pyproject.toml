@@ -44,7 +44,7 @@ pyte = "^0.8.2"
 ptyprocess = "^0.7.0"
 # Process metrics collection (UI Revision Plan - Phase 3 Status Bar)
 # See docs/UI-revision-plan.md section 3.4
-psutil = "^5.9.0"
+psutil = "^7.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

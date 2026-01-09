@@ -122,3 +122,44 @@ lock:
             (cd "$project" && poetry lock)
         fi
     done
+
+# Package all subprojects into distributable format (wheel and sdist)
+# Cleans previous artifacts, builds all packages, and places them in dist/
+package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Clean up previous build artifacts
+    echo "Cleaning previous build artifacts..."
+    rm -rf dist
+    for project in {{ subprojects }}; do
+        if [ -d "$project" ]; then
+            rm -rf "$project/dist"
+        fi
+    done
+
+    # Create central dist directory
+    mkdir -p dist
+
+    # Build all subprojects in dependency order (core first, then others, cli last)
+    for project in core plugins stats ui cli; do
+        if [ -d "$project" ]; then
+            echo "Building $project..."
+            (cd "$project" && poetry build)
+            # Copy built packages to central dist directory
+            if [ -d "$project/dist" ]; then
+                cp "$project/dist/"* dist/
+            fi
+        fi
+    done
+
+    echo "All packages built and placed in dist/"
+    ls -la dist/
+
+# Install the CLI tool globally using pipx from git repository
+install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Installing update-all CLI via pipx..."
+    pipx install "git+https://github.com/adamryczkowski/updateall.git#subdirectory=cli" --force
+    echo "Installation complete. Run 'update-all --help' to verify."

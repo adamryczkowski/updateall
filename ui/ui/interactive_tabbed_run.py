@@ -281,6 +281,11 @@ class InteractiveTabbedApp(App[None]):
         Binding("ctrl+h", "show_help", "Help", show=True),
     ]
 
+    # Disable Textual's built-in command palette to prevent Ctrl+P conflict
+    # Our app uses Ctrl+P for toggle_pause action instead
+    # See: https://textual.textualize.io/guide/command_palette/#disabling-the-command-palette
+    ENABLE_COMMAND_PALETTE: ClassVar[bool] = False
+
     # Reactive properties
     active_tab_index: reactive[int] = reactive(0)
 

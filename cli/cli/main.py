@@ -33,10 +33,27 @@ app = typer.Typer(
 console = Console()
 
 
+def _get_package_version(package_name: str) -> str:
+    """Get version of a package, returning 'not installed' if not found."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(package_name)
+    except PackageNotFoundError:
+        return "not installed"
+
+
 def version_callback(value: bool) -> None:
     """Print version and exit."""
     if value:
         console.print(f"[bold blue]update-all[/bold blue] version {__version__}")
+        console.print()
+        console.print("[dim]Components:[/dim]")
+        console.print(f"  [cyan]cli[/cyan]     {_get_package_version('update-all-cli')}")
+        console.print(f"  [cyan]core[/cyan]    {_get_package_version('update-all-core')}")
+        console.print(f"  [cyan]ui[/cyan]      {_get_package_version('update-all-ui')}")
+        console.print(f"  [cyan]plugins[/cyan] {_get_package_version('update-all-plugins')}")
+        console.print(f"  [cyan]stats[/cyan]   {_get_package_version('update-all-stats')}")
         raise typer.Exit()
 
 

@@ -13,6 +13,34 @@ from cli.main import app
 runner = CliRunner()
 
 
+class TestVersionOption:
+    """Tests for --version CLI option."""
+
+    def test_version_shows_cli_version(self) -> None:
+        """Test that --version shows CLI version."""
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert "update-all" in result.stdout
+        assert "version" in result.stdout
+
+    def test_version_shows_components(self) -> None:
+        """Test that --version shows all component versions."""
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert "Components:" in result.stdout
+        assert "cli" in result.stdout
+        assert "core" in result.stdout
+        assert "ui" in result.stdout
+        assert "plugins" in result.stdout
+        assert "stats" in result.stdout
+
+    def test_version_short_option(self) -> None:
+        """Test that -V short option works."""
+        result = runner.invoke(app, ["-V"])
+        assert result.exit_code == 0
+        assert "update-all" in result.stdout
+
+
 class TestPausePhasesOption:
     """Tests for --pause-phases CLI option."""
 

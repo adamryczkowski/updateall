@@ -188,4 +188,8 @@ def register_builtin_plugins(registry: PluginRegistry | None = None) -> PluginRe
         registry.register(YoutubeDlPlugin)
         registry.register(YtDlpPlugin)
 
+        # Mock/Debug plugins (always available for testing)
+        registry.register(MockAlphaPlugin)
+        registry.register(MockBetaPlugin)
+
     return registry

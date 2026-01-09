@@ -3,8 +3,9 @@
 This module provides an InteractiveTabbedApp that runs plugins in PTY sessions
 with full terminal emulation, allowing for interactive input and live output.
 
-Phase 4 - Integration
+Phase 4 - Integration (with Phase 2 Visual Enhancements)
 See docs/interactive-tabs-implementation-plan.md
+See docs/UI-revision-plan.md section 4 Phase 2
 """
 
 from __future__ import annotations
@@ -23,6 +24,14 @@ from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from ui.input_router import InputRouter
 from ui.key_bindings import KeyBindings
+from ui.phase_tab import (
+    PHASE_TAB_CSS,
+    DisplayPhase,
+    TabStatus,
+    determine_tab_status,
+    get_tab_css_class,
+    get_tab_label,
+)
 from ui.pty_session import is_pty_available
 from ui.sudo import SudoKeepAlive, SudoStatus, check_sudo_status
 from ui.terminal_pane import (
@@ -52,6 +61,9 @@ class InteractiveTabData:
     error_message: str | None = None
     output_bytes: int = 0
     config: PaneConfig = field(default_factory=PaneConfig)
+    # Phase 2: Visual enhancement fields
+    current_phase: DisplayPhase = DisplayPhase.PENDING
+    tab_status: TabStatus = TabStatus.PENDING
 
 
 class AllPluginsCompleted(Message):
@@ -178,7 +190,8 @@ class InteractiveTabbedApp(App[None]):
 
     TITLE = f"InteractiveTabbedApp (UI v{_get_ui_version()})"
 
-    CSS = """
+    CSS = (
+        """
     InteractiveTabbedApp {
         background: $surface;
     }
@@ -228,6 +241,8 @@ class InteractiveTabbedApp(App[None]):
         display: none;
     }
     """
+        + PHASE_TAB_CSS
+    )
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("ctrl+tab", "next_tab", "Next Tab", show=True),
@@ -329,15 +344,31 @@ class InteractiveTabbedApp(App[None]):
                     scrollback_lines=10000,
                 )
 
-                # Create tab data
-                self.tab_data[plugin.name] = InteractiveTabData(
+                # Create tab data with Phase 2 visual enhancement fields
+                tab_data = InteractiveTabData(
                     plugin_name=plugin.name,
                     plugin=plugin,
                     command=command,
                     config=pane_config,
+                    current_phase=DisplayPhase.PENDING,
+                    tab_status=TabStatus.PENDING,
                 )
+                self.tab_data[plugin.name] = tab_data
 
-                with TabPane(plugin.name, id=f"tab-{plugin.name}"):
+                # Generate phase-aware tab label
+                # Format: [status_icon] plugin_name (phase_name)
+                initial_label = get_tab_label(
+                    plugin.name,
+                    tab_data.tab_status,
+                    tab_data.current_phase,
+                )
+                initial_css_class = get_tab_css_class(tab_data.tab_status)
+
+                with TabPane(
+                    initial_label,
+                    id=f"tab-{plugin.name}",
+                    classes=initial_css_class,
+                ):
                     pane = TerminalPane(
                         pane_id=plugin.name,
                         pane_name=plugin.name,
@@ -531,22 +562,82 @@ class InteractiveTabbedApp(App[None]):
     def handle_pane_state_changed(self, message: PaneStateChanged) -> None:
         """Handle pane state change messages.
 
+        Updates the tab data, visual status, and progress bar when a pane's
+        state changes. This is part of Phase 2 Visual Enhancements.
+
         Args:
             message: The state change message.
         """
         plugin_name = message.pane_id
         if plugin_name in self.tab_data:
-            self.tab_data[plugin_name].state = message.state
-            self.tab_data[plugin_name].exit_code = message.exit_code
+            tab_data = self.tab_data[plugin_name]
+            tab_data.state = message.state
+            tab_data.exit_code = message.exit_code
 
             if message.state in (PaneState.SUCCESS, PaneState.FAILED, PaneState.EXITED):
-                self.tab_data[plugin_name].end_time = datetime.now(tz=UTC)
+                tab_data.end_time = datetime.now(tz=UTC)
+
+            # Phase 2: Update tab status based on pane state
+            new_status = determine_tab_status(message.state.value)
+            old_status = tab_data.tab_status
+            tab_data.tab_status = new_status
+
+            # Update display phase based on state
+            if message.state == PaneState.SUCCESS:
+                tab_data.current_phase = DisplayPhase.COMPLETE
+            elif message.state == PaneState.RUNNING:
+                # When running, show UPDATE phase (CHECK in core terms)
+                # This will be enhanced in Phase 1 with PhaseController
+                tab_data.current_phase = DisplayPhase.UPDATE
+
+            # Update the tab's visual appearance if status changed
+            if new_status != old_status:
+                self._update_tab_visual(plugin_name, tab_data)
 
         # Update progress
         self._update_progress()
 
         # Check if all plugins completed
         self._check_all_completed()
+
+    def _update_tab_visual(
+        self,
+        plugin_name: str,
+        tab_data: InteractiveTabData,
+    ) -> None:
+        """Update the visual appearance of a tab.
+
+        This updates the tab's CSS class and label to reflect the current
+        status and phase. Part of Phase 2 Visual Enhancements.
+
+        Args:
+            plugin_name: Name of the plugin/tab.
+            tab_data: The tab data containing current status and phase.
+        """
+        try:
+            # Get the TabPane widget
+            tab_pane = self.query_one(f"#tab-{plugin_name}", TabPane)
+
+            # Update CSS classes for status coloring
+            # Remove all status classes first
+            for status in TabStatus:
+                css_class = get_tab_css_class(status)
+                tab_pane.remove_class(css_class)
+
+            # Add the new status class
+            new_css_class = get_tab_css_class(tab_data.tab_status)
+            tab_pane.add_class(new_css_class)
+
+            # Note: Textual's TabPane doesn't support dynamic label updates
+            # after creation. The label is set at compose time.
+            # For full dynamic label support, we would need to use
+            # TabbedContent.get_tab() and modify the Tab widget directly,
+            # which requires Textual 0.40+ API.
+            # For now, the status is indicated by the CSS class coloring.
+
+        except Exception:
+            # Tab not yet mounted or already unmounted
+            pass
 
     @on(PaneOutputMessage)
     def handle_pane_output(self, message: PaneOutputMessage) -> None:

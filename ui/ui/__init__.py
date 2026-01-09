@@ -25,6 +25,12 @@ Phase 4 - Integration adds:
 - TerminalPane: Container widget combining TerminalView with PTY management
 - InteractiveTabbedApp: Main application with PTY-based terminal tabs
 - See docs/interactive-tabs-implementation-plan.md
+
+UI Revision Plan - Phase 2 Visual Enhancements adds:
+- DisplayPhase: User-facing phase names (Update, Download, Upgrade)
+- TabStatus: Visual status indicators (completed, running, error, pending, locked)
+- Phase-aware tab labels with color-coded status icons
+- See docs/UI-revision-plan.md
 """
 
 from ui.event_handler import (
@@ -41,6 +47,19 @@ from ui.interactive_tabbed_run import (
 )
 from ui.key_bindings import InvalidKeyError, KeyBindings, normalize_key
 from ui.panels import SummaryPanel
+from ui.phase_tab import (
+    PHASE_TAB_CSS,
+    TAB_STATUS_COLORS,
+    TAB_STATUS_CSS_CLASSES,
+    TAB_STATUS_ICONS,
+    DisplayPhase,
+    TabStatus,
+    determine_tab_status,
+    determine_tab_status_from_pane_state,
+    get_display_phase,
+    get_tab_css_class,
+    get_tab_label,
+)
 from ui.progress import ProgressDisplay
 from ui.pty_manager import PTYSessionManager, SessionNotFoundError
 from ui.pty_session import (
@@ -79,9 +98,14 @@ from ui.terminal_screen import StyledChar, TerminalScreen
 from ui.terminal_view import TerminalView, ansi_color_to_rich_color
 
 __all__ = [
+    "PHASE_TAB_CSS",
+    "TAB_STATUS_COLORS",
+    "TAB_STATUS_CSS_CLASSES",
+    "TAB_STATUS_ICONS",
     "BatchedEvent",
     "BatchedEventHandler",
     "CallbackEventHandler",
+    "DisplayPhase",
     "InputRouter",
     "InteractiveTabbedApp",
     "InvalidKeyError",
@@ -108,6 +132,7 @@ __all__ = [
     "SudoKeepAlive",
     "SudoStatus",
     "SummaryPanel",
+    "TabStatus",
     "TabbedRunApp",
     "TerminalPane",
     "TerminalScreen",
@@ -117,7 +142,12 @@ __all__ = [
     "UIEventHandler",
     "ansi_color_to_rich_color",
     "check_sudo_status",
+    "determine_tab_status",
+    "determine_tab_status_from_pane_state",
     "ensure_sudo_authenticated",
+    "get_display_phase",
+    "get_tab_css_class",
+    "get_tab_label",
     "is_pty_available",
     "normalize_key",
     "refresh_sudo_timestamp",

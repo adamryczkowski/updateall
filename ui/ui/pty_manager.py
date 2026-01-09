@@ -285,17 +285,45 @@ class PTYSessionManager:
             return
 
         try:
-            while session.is_running:
+            # Read output while process is running or has remaining data
+            # Use a flag to track if we've read any data
+            read_attempts = 0
+            max_empty_reads = 3  # Allow a few empty reads after process exits
+
+            while True:
+                # Check if process is still running
+                is_running = session.is_running
+
                 try:
                     data = await session.read(timeout=0.1)
-                    if data and self._on_output:
-                        self._on_output(session_id, data)
+                    if data:
+                        read_attempts = 0  # Reset counter on successful read
+                        if self._on_output:
+                            self._on_output(session_id, data)
+                    elif not is_running:
+                        # Process exited and no data - increment counter
+                        read_attempts += 1
+                        if read_attempts >= max_empty_reads:
+                            break
                 except PTYReadTimeoutError:
+                    if not is_running:
+                        # Process exited and no more data available
+                        read_attempts += 1
+                        if read_attempts >= max_empty_reads:
+                            break
+                    # If still running, just continue the loop
                     continue
                 except Exception:
+                    # Other error - exit the loop
                     break
 
-            # Session has exited
+            # Wait for process to fully exit and get exit code
+            # This handles fast-exiting commands where process may have
+            # exited before we started reading
+            with contextlib.suppress(Exception):
+                await session.wait(timeout=0.5)
+
+            # Session has exited - call exit callback
             if self._on_exit:
                 self._on_exit(session_id, session.exit_code)
 

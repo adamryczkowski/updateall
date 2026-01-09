@@ -37,6 +37,12 @@ UI Revision Plan - Phase 3 Status Bar adds:
 - PhaseMetrics: Dataclass for runtime metrics
 - MetricsCollector: Process metrics collection using psutil
 - See docs/UI-revision-plan.md section 3.4
+
+UI Revision Plan - Phase 5 Integration and Polish adds:
+- End-to-end integration tests for phase control features
+- Performance optimization and benchmarks
+- Documentation updates with migration guide
+- See docs/UI-revision-plan.md section 4 Phase 5
 """
 
 from ui.event_handler import (

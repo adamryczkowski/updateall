@@ -49,6 +49,24 @@ await run_with_interactive_tabbed_ui(
 )
 ----
 
+==== Phase Control (New in UI Revision)
+
+The interactive UI supports phase-based execution with pause/resume control:
+
+[source,python]
+----
+from ui.interactive_tabbed_run import run_with_interactive_tabbed_ui
+
+# Run with phase pause enabled
+await run_with_interactive_tabbed_ui(
+    plugins=[apt_plugin, flatpak_plugin],
+    configs=plugin_configs,
+    dry_run=False,
+    pause_phases=True,      # Pause before each phase
+    max_concurrent=4,       # Limit concurrent operations
+)
+----
+
 ==== Keyboard Shortcuts
 
 [cols="2,3"]
@@ -81,6 +99,18 @@ await run_with_interactive_tabbed_ui(
 
 | `F1`
 | Show help
+
+| `Ctrl+P` / `F8`
+| Toggle pause before next phase
+
+| `Ctrl+R` / `F9`
+| Retry failed phase
+
+| `Ctrl+S` / `F10`
+| Save logs to file
+
+| `Ctrl+H`
+| Show detailed help
 |===
 
 ==== Custom Key Bindings
@@ -103,6 +133,7 @@ bindings = KeyBindings({
 # - tab_1 through tab_9
 # - quit, help
 # - scroll_up, scroll_down, scroll_top, scroll_bottom
+# - pause_resume, retry_phase, save_logs, show_help (Phase Control)
 ----
 
 === Streaming Tabbed UI (Legacy)
@@ -353,8 +384,124 @@ PTY is not available on Windows. The system automatically falls back to the stre
 
 MIT License
 
+== Migration Guide
+
+=== Migrating from Previous Versions
+
+==== New CLI Options
+
+The following CLI options have been added:
+
+[cols="2,3"]
+|===
+| Option | Description
+
+| `--pause-phases` / `-P`
+| Pause before each phase (Update, Download, Upgrade), requiring confirmation to proceed.
+
+| `--concurrency` / `-j`
+| Limit the maximum number of concurrent operations. Default: number of CPU cores.
+|===
+
+Example usage:
+
+[source,bash]
+----
+# Run with phase pausing enabled
+update-all run --interactive --pause-phases
+
+# Limit concurrency to 2 operations
+update-all run --interactive --concurrency 2
+
+# Combine both options
+update-all run -i -P -j 4
+----
+
+==== New Keyboard Shortcuts
+
+The following keyboard shortcuts have been added for phase control:
+
+[cols="2,3"]
+|===
+| Shortcut | Action
+
+| `Ctrl+P` / `F8`
+| Toggle pause before next phase. When enabled, the app will pause before transitioning to the next phase.
+
+| `Ctrl+R` / `F9`
+| Retry failed phase. Restarts the PTY session for the active pane if it has failed.
+
+| `Ctrl+S` / `F10`
+| Save logs to file. Saves the terminal output to `~/.local/share/update-all/logs/`.
+
+| `Ctrl+H`
+| Show detailed help with all keyboard shortcuts.
+|===
+
+==== API Changes
+
+The `run_with_interactive_tabbed_ui` function now accepts additional parameters:
+
+[source,python]
+----
+# Before (still works)
+await run_with_interactive_tabbed_ui(
+    plugins=[apt_plugin],
+    configs=plugin_configs,
+    dry_run=False,
+)
+
+# After (new parameters available)
+await run_with_interactive_tabbed_ui(
+    plugins=[apt_plugin],
+    configs=plugin_configs,
+    dry_run=False,
+    pause_phases=True,      # NEW: Pause before each phase
+    max_concurrent=4,       # NEW: Limit concurrent operations
+)
+----
+
+The `InteractiveTabbedApp` class also accepts these new parameters:
+
+[source,python]
+----
+app = InteractiveTabbedApp(
+    plugins=[apt_plugin],
+    pause_phases=True,
+    max_concurrent=4,
+)
+----
+
+==== Tab Visual Enhancements
+
+Tabs now display:
+
+* **Status icons** - Visual indicators for tab status (🟢 completed, 🟡 running, 🔴 error, ⬜ pending, 🔒 locked)
+* **Phase labels** - Current phase displayed in tab label (Update, Download, Upgrade)
+* **Color coding** - Tab background color changes based on status
+
+==== Status Bar Metrics
+
+Each tab now includes a status bar displaying:
+
+* Current status and ETA
+* CPU and memory usage
+* Items processed
+* Network and disk I/O
+* CPU time
+
+==== Backward Compatibility
+
+All existing code continues to work without modification. The new features are opt-in:
+
+* Phase pausing is disabled by default
+* Concurrency defaults to CPU count
+* New keyboard shortcuts don't conflict with existing ones
+* Tab visual enhancements are automatic but non-breaking
+
 == See Also
 
 * link:../docs/interactive-tabs-implementation-plan.md[Interactive Tabs Implementation Plan]
 * link:../docs/interactive-tabs-architecture-evaluation.md[Architecture Evaluation]
 * link:../docs/interactive-tabs-risk-analysis.md[Risk Analysis]
+* link:../docs/UI-revision-plan.md[UI Revision Plan]

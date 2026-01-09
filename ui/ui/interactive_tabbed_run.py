@@ -493,7 +493,12 @@ class InteractiveTabbedApp(App[None]):
             self.notify("Sudo password may be required", severity="warning")
 
     async def _start_all_plugins(self) -> None:
-        """Start all plugin PTY sessions."""
+        """Start all plugin PTY sessions.
+
+        If pause_phases is enabled, plugins will be set to PAUSED state
+        instead of starting immediately. Users can then manually start
+        each plugin or resume all.
+        """
         for plugin_name, pane in self.terminal_panes.items():
             tab_data = self.tab_data[plugin_name]
             plugin = tab_data.plugin
@@ -503,6 +508,7 @@ class InteractiveTabbedApp(App[None]):
             if config and not getattr(config, "enabled", True):
                 tab_data.state = PaneState.EXITED
                 tab_data.error_message = "Plugin is disabled"
+                tab_data.tab_status = TabStatus.LOCKED
                 self._update_tab_visual(plugin_name, tab_data)
                 self._update_progress()
                 continue
@@ -520,6 +526,7 @@ class InteractiveTabbedApp(App[None]):
                     tab_data.state = PaneState.EXITED
                     tab_data.error_message = "Not applicable (required tools not installed)"
                     tab_data.end_time = datetime.now(tz=UTC)
+                    tab_data.tab_status = TabStatus.LOCKED
 
                     # Display message in the terminal view
                     if pane.terminal_view:
@@ -540,6 +547,29 @@ class InteractiveTabbedApp(App[None]):
             except Exception:
                 # If availability check fails, try to start anyway
                 pass
+
+            # If pause_phases is enabled, don't start the plugin automatically
+            if self._pause_enabled:
+                tab_data.state = PaneState.IDLE
+                tab_data.current_phase = DisplayPhase.PENDING
+                tab_data.tab_status = TabStatus.PENDING
+
+                # Display pause message in the terminal view
+                if pane.terminal_view:
+                    pause_msg = (
+                        f"\r\n\x1b[36m╭─ Paused ────────────────────────────────────╮\x1b[0m\r\n"
+                        f"\x1b[36m│\x1b[0m Plugin: {plugin_name}\r\n"
+                        f"\x1b[36m│\x1b[0m\r\n"
+                        f"\x1b[36m│\x1b[0m Waiting for user to start.\r\n"
+                        f"\x1b[36m│\x1b[0m Press Ctrl+P to toggle pause mode,\r\n"
+                        f"\x1b[36m│\x1b[0m or Ctrl+R to start this plugin.\r\n"
+                        f"\x1b[36m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                    )
+                    pane.terminal_view.feed(pause_msg.encode("utf-8"))
+
+                self._update_tab_visual(plugin_name, tab_data)
+                self._update_progress()
+                continue
 
             # Start the pane with error handling
             tab_data.start_time = datetime.now(tz=UTC)
@@ -714,12 +744,24 @@ class InteractiveTabbedApp(App[None]):
             new_css_class = get_tab_css_class(tab_data.tab_status)
             tab_pane.add_class(new_css_class)
 
-            # Note: Textual's TabPane doesn't support dynamic label updates
-            # after creation. The label is set at compose time.
-            # For full dynamic label support, we would need to use
-            # TabbedContent.get_tab() and modify the Tab widget directly,
-            # which requires Textual 0.40+ API.
-            # For now, the status is indicated by the CSS class coloring.
+            # Update the tab label dynamically using TabbedContent.get_tab()
+            # This requires Textual 0.40+ API
+            try:
+                tabs = self.query_one("#tabs", TabbedContent)
+                tab_id = f"tab-{plugin_name}"
+                tab = tabs.get_tab(tab_id)
+                if tab:
+                    # Generate the new label with status icon and phase
+                    new_label = get_tab_label(
+                        plugin_name,
+                        tab_data.tab_status,
+                        tab_data.current_phase,
+                    )
+                    tab.label = new_label
+            except Exception:
+                # TabbedContent.get_tab() may not be available in older Textual versions
+                # Fall back to CSS class coloring only
+                pass
 
         except Exception:
             # Tab not yet mounted or already unmounted

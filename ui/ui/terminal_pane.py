@@ -5,6 +5,9 @@ with a status bar and manages the connection between the view and a PTY session.
 
 Phase 4 - Integration
 See docs/interactive-tabs-implementation-plan.md section 3.2.5
+
+UI Revision Plan - Phase 3 Status Bar
+See docs/UI-revision-plan.md section 3.4
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from textual.widgets import Static
 
 from ui.input_router import InputRouter
 from ui.key_bindings import KeyBindings
+from ui.phase_status_bar import MetricsCollector, PhaseStatusBar
 from ui.pty_manager import PTYSessionManager
 from ui.pty_session import PTYReadTimeoutError
 from ui.terminal_view import TerminalView
@@ -60,6 +64,11 @@ class PaneConfig:
     # Display settings
     show_status_bar: bool = True
     show_scrollbar: bool = True
+
+    # Phase 3: Status bar with metrics
+    # See docs/UI-revision-plan.md section 3.4
+    show_phase_status_bar: bool = False
+    metrics_update_interval: float = 1.0
 
 
 class PaneOutputMessage(Message):
@@ -276,6 +285,11 @@ class TerminalPane(Container):
         self._status_bar: PaneStatusBar | None = None
         self._input_router: InputRouter | None = None
 
+        # Phase 3: Status bar with metrics
+        self._phase_status_bar: PhaseStatusBar | None = None
+        self._metrics_collector: MetricsCollector | None = None
+        self._metrics_update_task: asyncio.Task[None] | None = None
+
     @property
     def state(self) -> PaneState:
         """Get the current pane state."""
@@ -295,6 +309,24 @@ class TerminalPane(Container):
     def is_running(self) -> bool:
         """Check if the PTY process is running."""
         return self._state == PaneState.RUNNING
+
+    @property
+    def phase_status_bar(self) -> PhaseStatusBar | None:
+        """Get the phase status bar widget.
+
+        Returns:
+            The PhaseStatusBar widget if enabled, None otherwise.
+        """
+        return self._phase_status_bar
+
+    @property
+    def metrics_collector(self) -> MetricsCollector | None:
+        """Get the metrics collector.
+
+        Returns:
+            The MetricsCollector if enabled, None otherwise.
+        """
+        return self._metrics_collector
 
     @classmethod
     async def get_session_manager(cls) -> PTYSessionManager:
@@ -332,6 +364,14 @@ class TerminalPane(Container):
             id=f"terminal-{self.pane_id}",
         )
         yield self._terminal_view
+
+        # Phase 3: Add phase status bar with metrics if enabled
+        if self.config.show_phase_status_bar:
+            self._phase_status_bar = PhaseStatusBar(
+                pane_id=self.pane_id,
+                id=f"phase-status-{self.pane_id}",
+            )
+            yield self._phase_status_bar
 
     async def on_mount(self) -> None:
         """Handle mount event."""
@@ -419,11 +459,35 @@ class TerminalPane(Container):
         # Start reading output
         self._read_task = asyncio.create_task(self._read_loop())
 
+        # Phase 3: Start metrics collection if phase status bar is enabled
+        if self.config.show_phase_status_bar and self._phase_status_bar:
+            session = manager.get_session(self.pane_id)
+            pid = session.pid if session else None
+            self._metrics_collector = MetricsCollector(
+                pid=pid,
+                update_interval=self.config.metrics_update_interval,
+            )
+            self._metrics_collector.start()
+            self._metrics_collector.update_status("In Progress")
+            self._phase_status_bar.set_metrics_collector(self._metrics_collector)
+            self._metrics_update_task = asyncio.create_task(self._metrics_update_loop())
+
         # Post state change message
         self.post_message(PaneStateChanged(self.pane_id, self._state))
 
     async def stop(self) -> None:
         """Stop the PTY session."""
+        # Phase 3: Stop metrics collection
+        if self._metrics_update_task is not None:
+            self._metrics_update_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._metrics_update_task
+            self._metrics_update_task = None
+
+        if self._metrics_collector is not None:
+            self._metrics_collector.stop()
+            self._metrics_collector = None
+
         if self._read_task is not None:
             self._read_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -560,6 +624,72 @@ class TerminalPane(Container):
             self._status_bar.state = self._state
             if self._exit_code is not None:
                 self._status_bar.status_message = f"Exit code: {self._exit_code}"
+
+    async def _metrics_update_loop(self) -> None:
+        """Background task to periodically update metrics display.
+
+        This task runs while the PTY session is active and updates the
+        phase status bar with current metrics at regular intervals.
+        """
+        try:
+            while self._state == PaneState.RUNNING:
+                if self._metrics_collector and self._phase_status_bar:
+                    self._phase_status_bar.collect_and_update()
+                await asyncio.sleep(self.config.metrics_update_interval)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # Update final status when loop ends
+            if self._metrics_collector:
+                status_map = {
+                    PaneState.SUCCESS: "Completed",
+                    PaneState.FAILED: "Failed",
+                    PaneState.EXITED: "Exited",
+                }
+                final_status = status_map.get(self._state, "Stopped")
+                self._metrics_collector.update_status(final_status)
+                if self._phase_status_bar:
+                    self._phase_status_bar.collect_and_update()
+
+    def update_phase_metrics(
+        self,
+        *,
+        eta_seconds: float | None = None,
+        eta_error_seconds: float | None = None,
+        items_completed: int | None = None,
+        items_total: int | None = None,
+        pause_after_phase: bool | None = None,
+    ) -> None:
+        """Update phase metrics from external sources.
+
+        This method allows external components (like PhaseController) to
+        update metrics that cannot be collected automatically.
+
+        Args:
+            eta_seconds: Estimated time remaining in seconds.
+            eta_error_seconds: Error margin for ETA in seconds.
+            items_completed: Number of items processed.
+            items_total: Total number of items.
+            pause_after_phase: Whether pause is enabled after current phase.
+        """
+        if self._metrics_collector is None:
+            return
+
+        if eta_seconds is not None:
+            self._metrics_collector.update_eta(eta_seconds, eta_error_seconds)
+
+        if items_completed is not None:
+            self._metrics_collector.update_progress(
+                items_completed,
+                items_total,
+            )
+
+        if pause_after_phase is not None:
+            self._metrics_collector._metrics.pause_after_phase = pause_after_phase
+
+        # Trigger immediate update
+        if self._phase_status_bar:
+            self._phase_status_bar.collect_and_update()
 
     async def process_key(self, key: str) -> bool:
         """Process a key press and route it to the PTY.

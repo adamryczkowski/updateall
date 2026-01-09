@@ -1,6 +1,6 @@
 [project]
 name = "update-all-ui"
-version = "0.9.0"
+version = "0.10.0"
 description = "Rich terminal UI components for update-all system"
 readme = "README.adoc"
 requires-python = ">=3.11"
@@ -42,6 +42,9 @@ textual = ">=7.0.0,<8.0.0"
 # See docs/interactive-tabs-implementation-plan.md
 pyte = "^0.8.2"
 ptyprocess = "^0.7.0"
+# Process metrics collection (UI Revision Plan - Phase 3 Status Bar)
+# See docs/UI-revision-plan.md section 3.4
+psutil = "^5.9.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

@@ -31,6 +31,12 @@ UI Revision Plan - Phase 2 Visual Enhancements adds:
 - TabStatus: Visual status indicators (completed, running, error, pending, locked)
 - Phase-aware tab labels with color-coded status icons
 - See docs/UI-revision-plan.md
+
+UI Revision Plan - Phase 3 Status Bar adds:
+- PhaseStatusBar: Per-tab status bar with metrics display
+- PhaseMetrics: Dataclass for runtime metrics
+- MetricsCollector: Process metrics collection using psutil
+- See docs/UI-revision-plan.md section 3.4
 """
 
 from ui.event_handler import (
@@ -47,6 +53,14 @@ from ui.interactive_tabbed_run import (
 )
 from ui.key_bindings import InvalidKeyError, KeyBindings, normalize_key
 from ui.panels import SummaryPanel
+from ui.phase_status_bar import (
+    PHASE_STATUS_BAR_CSS,
+    MetricsCollector,
+    MetricsSnapshot,
+    PhaseMetrics,
+    PhaseStatusBar,
+    create_metrics_collector_for_pid,
+)
 from ui.phase_tab import (
     PHASE_TAB_CSS,
     TAB_STATUS_COLORS,
@@ -98,6 +112,7 @@ from ui.terminal_screen import StyledChar, TerminalScreen
 from ui.terminal_view import TerminalView, ansi_color_to_rich_color
 
 __all__ = [
+    "PHASE_STATUS_BAR_CSS",
     "PHASE_TAB_CSS",
     "TAB_STATUS_COLORS",
     "TAB_STATUS_CSS_CLASSES",
@@ -110,6 +125,8 @@ __all__ = [
     "InteractiveTabbedApp",
     "InvalidKeyError",
     "KeyBindings",
+    "MetricsCollector",
+    "MetricsSnapshot",
     "PTYAlreadyStartedError",
     "PTYError",
     "PTYNotStartedError",
@@ -120,6 +137,8 @@ __all__ = [
     "PaneOutputMessage",
     "PaneState",
     "PaneStateChanged",
+    "PhaseMetrics",
+    "PhaseStatusBar",
     "PluginProgressMessage",
     "PluginState",
     "ProgressDisplay",
@@ -142,6 +161,7 @@ __all__ = [
     "UIEventHandler",
     "ansi_color_to_rich_color",
     "check_sudo_status",
+    "create_metrics_collector_for_pid",
     "determine_tab_status",
     "determine_tab_status_from_pane_state",
     "ensure_sudo_authenticated",

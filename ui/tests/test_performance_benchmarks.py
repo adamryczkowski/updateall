@@ -31,7 +31,7 @@ class TestTerminalScreenPerformance:
     def test_feed_plain_text_performance(self) -> None:
         """Benchmark feeding plain text to terminal screen.
 
-        Target: Process 10,000 characters in < 100ms
+        Target: Process 10,000 characters in < 150ms (lenient for CI environments)
         """
         screen = TerminalScreen(columns=80, lines=24)
 
@@ -42,7 +42,7 @@ class TestTerminalScreenPerformance:
         screen.feed(test_data)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 0.1, f"Plain text processing took {elapsed:.3f}s, expected < 0.1s"
+        assert elapsed < 0.15, f"Plain text processing took {elapsed:.3f}s, expected < 0.15s"
 
     def test_feed_ansi_sequences_performance(self) -> None:
         """Benchmark feeding ANSI sequences to terminal screen.

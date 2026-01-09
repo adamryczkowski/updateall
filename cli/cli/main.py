@@ -811,14 +811,15 @@ def schedule_enable(
     manager = get_schedule_manager()
 
     # Try to parse as ScheduleInterval
+    schedule_value: ScheduleInterval | str
     try:
-        schedule = ScheduleInterval(interval)
+        schedule_value = ScheduleInterval(interval)
     except ValueError:
         # Use as custom OnCalendar value
-        schedule = interval
+        schedule_value = interval
 
     try:
-        manager.enable(schedule)
+        manager.enable(schedule_value)
         console.print(f"[green]Scheduled updates enabled: {interval}[/green]")
     except Exception as e:
         console.print(f"[red]Failed to enable schedule: {e}[/red]")

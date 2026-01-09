@@ -13,6 +13,7 @@ See docs/UI-revision-plan.md section 3.5 and 4 Phase 4
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +48,8 @@ from ui.terminal_pane import (
 )
 
 if TYPE_CHECKING:
+    from stats.estimator import ResourceEstimate
+
     from core.interfaces import UpdatePlugin
     from core.models import PluginConfig
 
@@ -330,6 +333,9 @@ class InteractiveTabbedApp(App[None]):
         # Phase control state (Phase 4 - Hot Keys and CLI)
         self._pause_enabled = pause_phases
 
+        # Stats estimates for projected download sizes
+        self._plugin_estimates: dict[str, ResourceEstimate] = {}
+
     @property
     def active_pane(self) -> TerminalPane | None:
         """Get the currently active terminal pane."""
@@ -426,12 +432,56 @@ class InteractiveTabbedApp(App[None]):
         if self.plugins:
             self._update_active_pane()
 
+        # Load stats estimates for projected download sizes
+        self._load_plugin_estimates()
+
         # Check sudo status
         await self._check_and_authenticate_sudo()
 
         # Start plugins if auto_start is enabled
         if self.auto_start and self._pty_available:
             await self._start_all_plugins()
+
+    def _load_plugin_estimates(self) -> None:
+        """Load resource estimates from the stats module.
+
+        This loads projected download sizes and other estimates for each plugin
+        from historical data. The estimates are displayed in the PhaseStatusBar.
+        """
+        # Try to load estimates from the stats module
+        with contextlib.suppress(Exception):
+            from stats.estimator import DartsTimeEstimator
+
+            estimator = DartsTimeEstimator()
+
+            for plugin in self.plugins:
+                with contextlib.suppress(Exception):
+                    estimate = estimator.estimate(plugin.name)
+                    self._plugin_estimates[plugin.name] = estimate
+
+                    # Update the pane's metrics with projected download sizes
+                    pane = self.terminal_panes.get(plugin.name)
+                    if pane and pane.metrics_collector:
+                        metrics = pane.metrics_collector._metrics
+
+                        # Set projected download size if available
+                        if estimate.download_size:
+                            metrics.projected_download_bytes = int(
+                                estimate.download_size.point_estimate
+                            )
+                            # For now, use same estimate for upgrade phase
+                            # In future, this could be phase-specific
+                            metrics.projected_upgrade_bytes = int(
+                                estimate.download_size.point_estimate
+                            )
+
+                        # Set ETA from wall clock estimate
+                        if estimate.wall_clock:
+                            pane.metrics_collector.update_eta(
+                                estimate.wall_clock.point_estimate,
+                                estimate.wall_clock.upper_bound
+                                - estimate.wall_clock.point_estimate,
+                            )
 
     async def on_unmount(self) -> None:
         """Handle app unmount."""
@@ -527,6 +577,7 @@ class InteractiveTabbedApp(App[None]):
                     tab_data.error_message = "Not applicable (required tools not installed)"
                     tab_data.end_time = datetime.now(tz=UTC)
                     tab_data.tab_status = TabStatus.LOCKED
+                    tab_data.current_phase = DisplayPhase.NOT_APPLICABLE
 
                     # Display message in the terminal view
                     if pane.terminal_view:
@@ -937,25 +988,62 @@ class InteractiveTabbedApp(App[None]):
                 pane.metrics_collector._metrics.pause_after_phase = self._pause_enabled
 
     async def action_retry_phase(self) -> None:
-        """Retry the current phase if it encountered an error.
+        """Retry the current phase or start a paused plugin.
 
-        This restarts the PTY session for the active pane if it has failed.
+        This restarts the PTY session for the active pane if it has failed,
+        or starts the plugin if it's in IDLE state (paused by --pause-phases).
         """
-        if self.active_pane and self.active_pane.state == PaneState.FAILED:
-            plugin_name = self.plugins[self.active_tab_index].name
-            tab_data = self.tab_data.get(plugin_name)
-            if tab_data:
-                # Reset state
-                tab_data.state = PaneState.IDLE
-                tab_data.exit_code = None
-                tab_data.error_message = None
-                tab_data.end_time = None
+        if not self.active_pane:
+            self.notify("No active pane", severity="warning")
+            return
 
-                # Restart the pane
-                await self.active_pane.start()
-                self.notify("Retrying phase...")
+        plugin_name = self.plugins[self.active_tab_index].name
+        tab_data = self.tab_data.get(plugin_name)
+
+        if not tab_data:
+            self.notify("No tab data found", severity="warning")
+            return
+
+        # Check if plugin is locked (not applicable or disabled)
+        if tab_data.tab_status == TabStatus.LOCKED:
+            self.notify("Plugin is not applicable or disabled", severity="warning")
+            return
+
+        # Handle failed state - retry
+        if self.active_pane.state == PaneState.FAILED:
+            # Reset state
+            tab_data.state = PaneState.IDLE
+            tab_data.exit_code = None
+            tab_data.error_message = None
+            tab_data.end_time = None
+            tab_data.current_phase = DisplayPhase.PENDING
+            tab_data.tab_status = TabStatus.PENDING
+
+            # Restart the pane
+            tab_data.start_time = datetime.now(tz=UTC)
+            await self.active_pane.start()
+            self.notify("Retrying phase...")
+            self._update_tab_visual(plugin_name, tab_data)
+            return
+
+        # Handle idle state - start paused plugin
+        if self.active_pane.state == PaneState.IDLE:
+            # Start the plugin
+            tab_data.start_time = datetime.now(tz=UTC)
+            tab_data.current_phase = DisplayPhase.UPDATE
+            tab_data.tab_status = TabStatus.RUNNING
+            await self.active_pane.start()
+            self.notify(f"Starting {plugin_name}...")
+            self._update_tab_visual(plugin_name, tab_data)
+            return
+
+        # Already running or completed
+        if self.active_pane.state == PaneState.RUNNING:
+            self.notify("Plugin is already running", severity="information")
+        elif self.active_pane.state == PaneState.SUCCESS:
+            self.notify("Plugin already completed successfully", severity="information")
         else:
-            self.notify("No failed phase to retry", severity="warning")
+            self.notify("No action available for current state", severity="warning")
 
     async def action_save_logs(self) -> None:
         """Save logs for the current tab.

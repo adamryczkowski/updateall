@@ -44,6 +44,10 @@ class PhaseMetrics:
         disk_io_bytes: Cumulative disk I/O bytes.
         cpu_time_seconds: Cumulative CPU time in seconds.
         error_message: Error message if metrics collection failed.
+        projected_download_bytes: Projected download size from stats (update phase).
+        projected_upgrade_bytes: Projected download size from stats (upgrade phase).
+        actual_download_bytes: Actual download size during update phase.
+        actual_upgrade_bytes: Actual download size during upgrade phase.
     """
 
     # Status
@@ -67,6 +71,14 @@ class PhaseMetrics:
     network_bytes: int = 0
     disk_io_bytes: int = 0
     cpu_time_seconds: float = 0.0
+
+    # Projected download sizes from stats module
+    projected_download_bytes: int | None = None
+    projected_upgrade_bytes: int | None = None
+
+    # Actual download sizes (tracked during execution)
+    actual_download_bytes: int = 0
+    actual_upgrade_bytes: int = 0
 
     # Error state
     error_message: str | None = None
@@ -415,25 +427,67 @@ class PhaseStatusBar(Static):
         eta_str = self._format_eta(m.eta_seconds, m.eta_error_seconds)
         line1 = f"Status: {m.status}{pause_indicator} | ETA: {eta_str}"
 
-        # Line 2: Resource usage
+        # Line 2: Resource usage and download projections
         items_str = self._format_items(m.items_completed, m.items_total)
+        download_str = self._format_download_stats(m)
         line2 = (
             f"CPU: {m.cpu_percent:.0f}% | "
             f"Mem: {m.memory_mb:.0f}/{m.memory_peak_mb:.0f}MB (peak) | "
             f"{items_str}"
         )
 
-        # Line 3: Cumulative metrics
+        # Line 3: Cumulative metrics and download sizes
         net_str = self._format_bytes(m.network_bytes)
         disk_str = self._format_bytes(m.disk_io_bytes)
         cpu_time_str = self._format_duration(m.cpu_time_seconds)
         line3 = f"Network: {net_str} ↓ | Disk I/O: {disk_str} | CPU Time: {cpu_time_str}"
+
+        # Add download projections if available
+        if download_str:
+            line3 += f" | {download_str}"
 
         # Add error indicator if needed
         if m.error_message:
             line3 += f" | [red]⚠ {m.error_message}[/red]"
 
         self.update(f"{line1}\n{line2}\n{line3}")
+
+    def _format_download_stats(self, m: PhaseMetrics) -> str:
+        """Format download statistics with projections and actuals.
+
+        Args:
+            m: PhaseMetrics containing download data.
+
+        Returns:
+            Formatted download stats string, or empty string if no data.
+        """
+        parts = []
+
+        # Update phase download
+        if m.projected_download_bytes is not None or m.actual_download_bytes > 0:
+            proj = (
+                self._format_bytes(m.projected_download_bytes)
+                if m.projected_download_bytes
+                else "?"
+            )
+            actual = (
+                self._format_bytes(m.actual_download_bytes)
+                if m.actual_download_bytes > 0
+                else "0 B"
+            )
+            parts.append(f"Update: {actual}/{proj}")
+
+        # Upgrade phase download
+        if m.projected_upgrade_bytes is not None or m.actual_upgrade_bytes > 0:
+            proj = (
+                self._format_bytes(m.projected_upgrade_bytes) if m.projected_upgrade_bytes else "?"
+            )
+            actual = (
+                self._format_bytes(m.actual_upgrade_bytes) if m.actual_upgrade_bytes > 0 else "0 B"
+            )
+            parts.append(f"Upgrade: {actual}/{proj}")
+
+        return " | ".join(parts) if parts else ""
 
     def _format_eta(
         self,

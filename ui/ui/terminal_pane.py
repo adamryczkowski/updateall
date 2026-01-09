@@ -67,7 +67,7 @@ class PaneConfig:
 
     # Phase 3: Status bar with metrics
     # See docs/UI-revision-plan.md section 3.4
-    show_phase_status_bar: bool = False
+    show_phase_status_bar: bool = True
     metrics_update_interval: float = 1.0
 
 

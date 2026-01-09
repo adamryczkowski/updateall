@@ -28,6 +28,7 @@ class DisplayPhase(str, Enum):
     UPGRADE = "Upgrade"  # Maps to Phase.EXECUTE
     PENDING = "Pending"  # Not yet started
     COMPLETE = "Complete"  # All phases done
+    NOT_APPLICABLE = "N/A"  # Plugin not applicable (tools not installed)
 
 
 def get_display_phase(phase: Phase | None) -> DisplayPhase:

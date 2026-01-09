@@ -495,16 +495,80 @@ class InteractiveTabbedApp(App[None]):
     async def _start_all_plugins(self) -> None:
         """Start all plugin PTY sessions."""
         for plugin_name, pane in self.terminal_panes.items():
+            tab_data = self.tab_data[plugin_name]
+            plugin = tab_data.plugin
+
             # Check if plugin is enabled
             config = self.configs.get(plugin_name)
             if config and not getattr(config, "enabled", True):
-                self.tab_data[plugin_name].state = PaneState.EXITED
-                self.tab_data[plugin_name].error_message = "Plugin is disabled"
+                tab_data.state = PaneState.EXITED
+                tab_data.error_message = "Plugin is disabled"
+                self._update_tab_visual(plugin_name, tab_data)
+                self._update_progress()
                 continue
 
-            # Start the pane
-            self.tab_data[plugin_name].start_time = datetime.now(tz=UTC)
-            await pane.start()
+            # Check if plugin is available (e.g., required tools are installed)
+            try:
+                if hasattr(plugin, "check_available"):
+                    available = await plugin.check_available()
+                elif hasattr(plugin, "is_available"):
+                    available = plugin.is_available()
+                else:
+                    available = True
+
+                if not available:
+                    tab_data.state = PaneState.EXITED
+                    tab_data.error_message = "Not applicable (required tools not installed)"
+                    tab_data.end_time = datetime.now(tz=UTC)
+
+                    # Display message in the terminal view
+                    if pane.terminal_view:
+                        msg = (
+                            f"\r\n\x1b[33m╭─ Not Applicable ───────────────────────────╮\x1b[0m\r\n"
+                            f"\x1b[33m│\x1b[0m Plugin: {plugin_name}\r\n"
+                            f"\x1b[33m│\x1b[0m\r\n"
+                            f"\x1b[33m│\x1b[0m Required tools are not installed.\r\n"
+                            f"\x1b[33m│\x1b[0m This plugin will be skipped.\r\n"
+                            f"\x1b[33m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                        )
+                        pane.terminal_view.feed(msg.encode("utf-8"))
+
+                    self._update_tab_visual(plugin_name, tab_data)
+                    self._update_progress()
+                    pane.post_message(PaneStateChanged(plugin_name, PaneState.EXITED))
+                    continue
+            except Exception:
+                # If availability check fails, try to start anyway
+                pass
+
+            # Start the pane with error handling
+            tab_data.start_time = datetime.now(tz=UTC)
+            try:
+                await pane.start()
+            except Exception as e:
+                # Handle startup errors gracefully - display in the tab
+                error_msg = str(e)
+                tab_data.state = PaneState.FAILED
+                tab_data.error_message = error_msg
+                tab_data.end_time = datetime.now(tz=UTC)
+
+                # Display error in the terminal view
+                if pane.terminal_view:
+                    error_display = (
+                        f"\r\n\x1b[31m╭─ Error ─────────────────────────────────────╮\x1b[0m\r\n"
+                        f"\x1b[31m│\x1b[0m Failed to start plugin: {plugin_name}\r\n"
+                        f"\x1b[31m│\x1b[0m\r\n"
+                        f"\x1b[31m│\x1b[0m {error_msg}\r\n"
+                        f"\x1b[31m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                    )
+                    pane.terminal_view.feed(error_display.encode("utf-8"))
+
+                # Update tab visual and progress
+                self._update_tab_visual(plugin_name, tab_data)
+                self._update_progress()
+
+                # Post state change message
+                pane.post_message(PaneStateChanged(plugin_name, PaneState.FAILED))
 
     def _update_active_pane(self) -> None:
         """Update which pane is marked as active."""

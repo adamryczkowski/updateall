@@ -3,6 +3,8 @@
 Core library providing models, interfaces, and utilities for the update-all system.
 """
 
+from importlib.metadata import version as get_package_version
+
 from core.config import ConfigManager, YamlConfigLoader, get_config_dir, get_default_config_path
 from core.interfaces import ConfigLoader, PluginExecutor, UpdatePlugin
 from core.metrics import (
@@ -109,7 +111,7 @@ from core.version import (
     parse_version,
 )
 
-__version__ = "0.3.0"
+__version__ = get_package_version("update-all-core")
 
 __all__ = [
     "CompletionEvent",

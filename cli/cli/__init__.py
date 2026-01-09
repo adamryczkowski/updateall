@@ -3,4 +3,6 @@
 Command-line interface for the update-all system.
 """
 
-__version__ = "0.3.1"
+from importlib.metadata import version
+
+__version__ = version("update-all-cli")

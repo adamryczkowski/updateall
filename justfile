@@ -156,10 +156,11 @@ package:
     echo "All packages built and placed in dist/"
     ls -la dist/
 
-# Install the CLI tool globally using pipx from git repository
+# Install the CLI tool globally using pipx from local sources
 install:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Installing update-all CLI via pipx..."
-    pipx install "git+https://github.com/adamryczkowski/updateall.git#subdirectory=cli" --force
+    echo "Installing update-all CLI via pipx from local sources..."
+    # Install the CLI package from the local cli directory
+    pipx install ./cli --force
     echo "Installation complete. Run 'update-all --help' to verify."

@@ -1,14 +1,18 @@
 """Mock Alpha plugin for debugging the interactive tabbed UI.
 
-This plugin simulates a long-running update task that takes about 2 minutes
-to complete, with progress updates every 10 seconds. It's designed to help
-verify that the tabbed output system is functioning correctly.
+This plugin simulates a long-running update task with three phases:
+- CHECK: Simulates checking for updates (light CPU, minimal download)
+- DOWNLOAD: Simulates downloading packages (heavy download, light CPU)
+- EXECUTE: Simulates installing packages (heavy CPU, minimal download)
+
+Each phase reports download and CPU statistics for testing the stats system.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from core.streaming import Phase
 from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
@@ -18,7 +22,7 @@ if TYPE_CHECKING:
 class MockAlphaPlugin(BasePlugin):
     """Mock Alpha plugin for debugging interactive mode.
 
-    Simulates a 2-minute update task with progress updates every 10 seconds.
+    Simulates a multi-phase update with download and CPU load simulation.
     Uses ASCII art and distinctive markers to make output easily identifiable.
     """
 
@@ -35,17 +39,160 @@ class MockAlphaPlugin(BasePlugin):
     @property
     def description(self) -> str:
         """Return plugin description."""
-        return "Mock Alpha - 2-minute simulated update with progress (debugging)"
+        return "Mock Alpha - Multi-phase simulated update with stats (debugging)"
 
     async def check_available(self) -> bool:
         """Mock is always available."""
         return True
 
+    def _build_check_script(self, dry_run: bool = False) -> str:
+        """Build the CHECK phase script.
+
+        Simulates checking for updates with light CPU and minimal download.
+        Reports estimated download/CPU for subsequent phases.
+        """
+        iterations = 2 if dry_run else 4
+        sleep_time = 1 if dry_run else 2
+
+        return f"""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║           MOCK ALPHA - CHECK PHASE (Update)                      ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+echo "🔷 [ALPHA] Checking for available updates..."
+echo ""
+
+# Simulate light CPU load (checking package metadata)
+for i in $(seq 1 {iterations}); do
+    echo "  📋 [ALPHA] Scanning repository $i of {iterations}..."
+
+    # Light CPU: simple loop
+    for j in $(seq 1 50000); do : ; done
+
+    # Minimal download simulation (reading small amount of data)
+    dd if=/dev/zero of=/dev/null bs=1K count=100 2>/dev/null
+
+    sleep {sleep_time}
+done
+
+echo ""
+echo "┌────────────────────────────────────────────────────────────────┐"
+echo "│ 🔷 [ALPHA] CHECK PHASE COMPLETE                                │"
+echo "├────────────────────────────────────────────────────────────────┤"
+echo "│ Found 12 packages to update                                    │"
+echo "│                                                                │"
+echo "│ 📊 ESTIMATED RESOURCES FOR REMAINING PHASES:                   │"
+echo "│   DOWNLOAD phase: ~50 MB download, ~5% CPU                     │"
+echo "│   UPGRADE phase:  ~2 MB download, ~80% CPU for 30s             │"
+echo "│                                                                │"
+echo "│ Total estimated: 52 MB download, 35s CPU time                  │"
+echo "└────────────────────────────────────────────────────────────────┘"
+echo ""
+"""
+
+    def _build_download_script(self, dry_run: bool = False) -> str:
+        """Build the DOWNLOAD phase script.
+
+        Simulates downloading packages with heavy download and light CPU.
+        """
+        iterations = 2 if dry_run else 5
+        sleep_time = 1 if dry_run else 2
+        download_size = "1M" if dry_run else "10M"
+
+        return f"""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║           MOCK ALPHA - DOWNLOAD PHASE                            ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+echo "🔷 [ALPHA] Downloading packages..."
+echo ""
+
+total_downloaded=0
+
+for i in $(seq 1 {iterations}); do
+    progress=$((i * 100 / {iterations}))
+    pkg_size=$((i * 10))
+    total_downloaded=$((total_downloaded + pkg_size))
+
+    echo "┌────────────────────────────────────────────────────────────────┐"
+    echo "│ 📥 [ALPHA] Downloading package $i of {iterations} (${{pkg_size}} MB)"
+    echo "│ Progress: [$progress%] Total: ${{total_downloaded}} MB"
+    echo "└────────────────────────────────────────────────────────────────┘"
+
+    # Heavy download simulation (reading larger amount of data)
+    dd if=/dev/zero of=/dev/null bs={download_size} count=1 2>/dev/null
+
+    # Light CPU during download
+    for j in $(seq 1 10000); do : ; done
+
+    sleep {sleep_time}
+done
+
+echo ""
+echo "┌────────────────────────────────────────────────────────────────┐"
+echo "│ 🔷 [ALPHA] DOWNLOAD PHASE COMPLETE                             │"
+echo "├────────────────────────────────────────────────────────────────┤"
+echo "│ Downloaded: ${{total_downloaded}} MB                           │"
+echo "│ Packages ready for installation: {iterations}                  │"
+echo "└────────────────────────────────────────────────────────────────┘"
+echo ""
+"""
+
+    def _build_execute_script(self, dry_run: bool = False) -> str:
+        """Build the EXECUTE phase script.
+
+        Simulates installing packages with heavy CPU and minimal download.
+        """
+        iterations = 2 if dry_run else 6
+        sleep_time = 1 if dry_run else 2
+        cpu_iterations = 50000 if dry_run else 500000
+
+        return f"""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║           MOCK ALPHA - EXECUTE PHASE (Upgrade)                   ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+echo "🔷 [ALPHA] Installing packages..."
+echo ""
+
+for i in $(seq 1 {iterations}); do
+    progress=$((i * 100 / {iterations}))
+
+    echo "┌────────────────────────────────────────────────────────────────┐"
+    echo "│ 🔧 [ALPHA] Installing package $i of {iterations}"
+    echo "│ Progress: [$progress%]"
+    echo "└────────────────────────────────────────────────────────────────┘"
+
+    # Heavy CPU simulation (compiling/installing)
+    echo "  ⚙️  Compiling alpha-package-$i..."
+    for j in $(seq 1 {cpu_iterations}); do : ; done
+
+    echo "  ✅ Installed alpha-package-$i"
+
+    # Minimal download (just config files)
+    dd if=/dev/zero of=/dev/null bs=1K count=10 2>/dev/null
+
+    sleep {sleep_time}
+done
+
+echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║                 MOCK ALPHA COMPLETED!                            ║"
+echo "╠══════════════════════════════════════════════════════════════════╣"
+echo "║ 📊 FINAL STATISTICS:                                             ║"
+echo "║   Packages updated: {iterations}                                 ║"
+echo "║   Total download: ~52 MB                                         ║"
+echo "║   CPU time: ~35 seconds                                          ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+echo "🔷 Mock Alpha finished successfully!"
+"""
+
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.
 
-        Returns a bash script that simulates a 2-minute update process
-        with progress updates every 10 seconds.
+        Returns a bash script that runs all three phases sequentially.
+        This is used when phase-by-phase execution is not enabled.
 
         Args:
             dry_run: If True, return a command that simulates the update.
@@ -53,69 +200,33 @@ class MockAlphaPlugin(BasePlugin):
         Returns:
             Command and arguments as a list.
         """
-        # Total duration: 120 seconds (2 minutes)
-        # Updates every 10 seconds = 12 iterations
-        total_iterations = 12
-        sleep_interval = 10
-
-        if dry_run:
-            total_iterations = 3
-            sleep_interval = 2
-
-        # Build the bash script inline
-        script = f"""
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║                    MOCK ALPHA PLUGIN                             ║"
-echo "║              Long-Running Update Simulation                      ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
-echo ""
-echo "🔷 Starting Mock Alpha update process..."
-echo "🔷 This will take approximately {total_iterations * sleep_interval} seconds"
-echo ""
-
-for i in $(seq 1 {total_iterations}); do
-    progress=$((i * 100 / {total_iterations}))
-    elapsed=$((i * {sleep_interval}))
-    remaining=$(({total_iterations * sleep_interval} - elapsed))
-
-    # Create a progress bar
-    filled=$((progress / 5))
-    empty=$((20 - filled))
-    bar=$(printf '█%.0s' $(seq 1 $filled 2>/dev/null) || echo "")
-    spaces=$(printf '░%.0s' $(seq 1 $empty 2>/dev/null) || echo "")
-
-    echo ""
-    echo "┌────────────────────────────────────────────────────────────────┐"
-    echo "│ ALPHA Progress: [$bar$spaces] $progress%"
-    echo "│ Step $i of {total_iterations} | Elapsed: ${{elapsed}}s | Remaining: ${{remaining}}s"
-    echo "└────────────────────────────────────────────────────────────────┘"
-
-    # Simulate some work being done
-    case $((i % 4)) in
-        0) echo "  📦 [ALPHA] Checking package dependencies..." ;;
-        1) echo "  📥 [ALPHA] Downloading updates..." ;;
-        2) echo "  🔧 [ALPHA] Installing packages..." ;;
-        3) echo "  ✅ [ALPHA] Verifying installation..." ;;
-    esac
-
-    # Show some fake package names
-    echo "  → Processing alpha-package-$i..."
-    echo "  → Updating alpha-lib-$((i * 2))..."
-
-    sleep {sleep_interval}
-done
-
-echo ""
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║                 MOCK ALPHA COMPLETED!                            ║"
-echo "║              All simulated updates applied                       ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
-echo ""
-echo "🔷 Mock Alpha finished successfully!"
-echo "🔷 Total packages processed: {total_iterations * 2}"
-"""
-
+        # Combine all phases into one script for backward compatibility
+        script = (
+            self._build_check_script(dry_run)
+            + self._build_download_script(dry_run)
+            + self._build_execute_script(dry_run)
+        )
         return ["/bin/bash", "-c", script]
+
+    def get_phase_commands(self, dry_run: bool = False) -> dict[Phase, list[str]]:
+        """Get commands for each execution phase.
+
+        Mock Alpha phases:
+        - CHECK: Simulate checking for updates (light CPU, minimal download)
+        - DOWNLOAD: Simulate downloading packages (heavy download, light CPU)
+        - EXECUTE: Simulate installing packages (heavy CPU, minimal download)
+
+        Args:
+            dry_run: If True, return commands that simulate faster.
+
+        Returns:
+            Dict mapping Phase to command list.
+        """
+        return {
+            Phase.CHECK: ["/bin/bash", "-c", self._build_check_script(dry_run)],
+            Phase.DOWNLOAD: ["/bin/bash", "-c", self._build_download_script(dry_run)],
+            Phase.EXECUTE: ["/bin/bash", "-c", self._build_execute_script(dry_run)],
+        }
 
     async def _execute_update(
         self,
@@ -150,4 +261,4 @@ echo "🔷 Total packages processed: {total_iterations * 2}"
             Number of packages updated (simulated).
         """
         # Return a simulated count
-        return 24
+        return 12

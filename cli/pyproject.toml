@@ -1,6 +1,6 @@
 [project]
 name = "update-all-cli"
-version = "0.3.1"
+version = "0.4.0"
 description = "Command-line interface for update-all system"
 readme = "README.adoc"
 requires-python = ">=3.11"

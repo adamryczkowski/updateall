@@ -6,12 +6,16 @@ with full terminal emulation, allowing for interactive input and live output.
 Phase 4 - Integration (with Phase 2 Visual Enhancements)
 See docs/interactive-tabs-implementation-plan.md
 See docs/UI-revision-plan.md section 4 Phase 2
+
+UI Revision Plan - Phase 4 Hot Keys and CLI
+See docs/UI-revision-plan.md section 3.5 and 4 Phase 4
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import on
@@ -263,6 +267,15 @@ class InteractiveTabbedApp(App[None]):
         Binding("alt+7", "goto_tab_7", "Tab 7", show=False),
         Binding("alt+8", "goto_tab_8", "Tab 8", show=False),
         Binding("alt+9", "goto_tab_9", "Tab 9", show=False),
+        # Phase control bindings (Phase 4 - Hot Keys and CLI)
+        # See docs/UI-revision-plan.md section 3.5
+        Binding("ctrl+p", "toggle_pause", "Pause/Resume", show=True),
+        Binding("f8", "toggle_pause", "Pause/Resume", show=False),
+        Binding("ctrl+r", "retry_phase", "Retry", show=True),
+        Binding("f9", "retry_phase", "Retry", show=False),
+        Binding("ctrl+s", "save_logs", "Save Logs", show=True),
+        Binding("f10", "save_logs", "Save Logs", show=False),
+        Binding("ctrl+h", "show_help", "Help", show=True),
     ]
 
     # Reactive properties
@@ -275,6 +288,8 @@ class InteractiveTabbedApp(App[None]):
         dry_run: bool = False,
         key_bindings: KeyBindings | None = None,
         auto_start: bool = True,
+        pause_phases: bool = False,
+        max_concurrent: int = 4,
         **kwargs: Any,
     ) -> None:
         """Initialize the interactive tabbed app.
@@ -285,6 +300,8 @@ class InteractiveTabbedApp(App[None]):
             dry_run: Whether to run in dry-run mode.
             key_bindings: Custom key bindings.
             auto_start: Whether to start plugins automatically on mount.
+            pause_phases: Whether to pause before each phase.
+            max_concurrent: Maximum number of concurrent operations.
             **kwargs: Additional arguments for App.
         """
         super().__init__(**kwargs)
@@ -294,6 +311,8 @@ class InteractiveTabbedApp(App[None]):
         self.dry_run = dry_run
         self.key_bindings = key_bindings or KeyBindings()
         self.auto_start = auto_start
+        self.pause_phases = pause_phases
+        self.max_concurrent = max_concurrent
 
         # Tab data
         self.tab_data: dict[str, InteractiveTabData] = {}
@@ -307,6 +326,9 @@ class InteractiveTabbedApp(App[None]):
 
         # PTY availability
         self._pty_available = is_pty_available()
+
+        # Phase control state (Phase 4 - Hot Keys and CLI)
+        self._pause_enabled = pause_phases
 
     @property
     def active_pane(self) -> TerminalPane | None:
@@ -790,6 +812,164 @@ class InteractiveTabbedApp(App[None]):
             title="Keyboard Shortcuts",
         )
 
+    # Phase control actions (Phase 4 - Hot Keys and CLI)
+    # See docs/UI-revision-plan.md section 3.5
+
+    def action_toggle_pause(self) -> None:
+        """Toggle pause before next phase.
+
+        When enabled, the app will pause before transitioning to the next phase,
+        allowing the user to review the current state before proceeding.
+        """
+        self._pause_enabled = not self._pause_enabled
+        status = "enabled" if self._pause_enabled else "disabled"
+        self.notify(f"Phase pause {status}")
+
+        # Update metrics collectors to show pause indicator
+        for pane in self.terminal_panes.values():
+            if pane.metrics_collector:
+                pane.metrics_collector._metrics.pause_after_phase = self._pause_enabled
+
+    async def action_retry_phase(self) -> None:
+        """Retry the current phase if it encountered an error.
+
+        This restarts the PTY session for the active pane if it has failed.
+        """
+        if self.active_pane and self.active_pane.state == PaneState.FAILED:
+            plugin_name = self.plugins[self.active_tab_index].name
+            tab_data = self.tab_data.get(plugin_name)
+            if tab_data:
+                # Reset state
+                tab_data.state = PaneState.IDLE
+                tab_data.exit_code = None
+                tab_data.error_message = None
+                tab_data.end_time = None
+
+                # Restart the pane
+                await self.active_pane.start()
+                self.notify("Retrying phase...")
+        else:
+            self.notify("No failed phase to retry", severity="warning")
+
+    async def action_save_logs(self) -> None:
+        """Save logs for the current tab.
+
+        Saves the terminal output to a file in the logs directory.
+        The file is named with the plugin name and timestamp.
+        """
+        if not self.active_pane:
+            self.notify("No active pane to save logs from", severity="warning")
+            return
+
+        plugin_name = self.plugins[self.active_tab_index].name
+        tab_data = self.tab_data.get(plugin_name)
+
+        try:
+            log_path = await self._save_pane_logs(plugin_name, tab_data)
+            self.notify(f"Logs saved to {log_path}")
+        except Exception as e:
+            self.notify(f"Failed to save logs: {e}", severity="error")
+
+    async def _save_pane_logs(
+        self,
+        plugin_name: str,
+        tab_data: InteractiveTabData | None,
+    ) -> Path:
+        """Save logs for a pane to a file.
+
+        Args:
+            plugin_name: Name of the plugin.
+            tab_data: Tab data for the plugin.
+
+        Returns:
+            Path to the saved log file.
+
+        Raises:
+            OSError: If the log file cannot be written.
+        """
+        # Create logs directory
+        logs_dir = Path.home() / ".local" / "share" / "update-all" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate filename with timestamp
+        timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+        log_path = logs_dir / f"update-all-{plugin_name}-{timestamp}.log"
+
+        # Get terminal content
+        terminal_content = ""
+        if self.active_pane and self.active_pane.terminal_view:
+            # Get the terminal display content
+            display = self.active_pane.terminal_view.terminal_display
+            terminal_content = "\n".join(display)
+
+        # Build log content
+        lines = [
+            "=" * 40,
+            f"Update-All Log: {plugin_name}",
+            f"Date: {datetime.now(tz=UTC).isoformat()}",
+        ]
+
+        if tab_data:
+            lines.extend(
+                [
+                    f"Phase: {tab_data.current_phase.value}",
+                    f"Status: {tab_data.state.value}",
+                ]
+            )
+
+        lines.extend(
+            [
+                "=" * 40,
+                "",
+                "--- Terminal Output ---",
+                terminal_content,
+                "",
+                "--- Metrics Summary ---",
+            ]
+        )
+
+        if tab_data:
+            duration = ""
+            if tab_data.start_time:
+                end = tab_data.end_time or datetime.now(tz=UTC)
+                duration = f"{(end - tab_data.start_time).total_seconds():.1f}s"
+
+            lines.extend(
+                [
+                    f"Duration: {duration}",
+                    f"Exit Code: {tab_data.exit_code}",
+                ]
+            )
+
+        # Write log file
+        log_path.write_text("\n".join(lines))
+        return log_path
+
+    def action_show_help(self) -> None:
+        """Show help overlay with all keyboard shortcuts.
+
+        Displays a comprehensive help message with all available
+        keyboard shortcuts organized by category.
+        """
+        help_text = """
+Keyboard Shortcuts:
+
+Navigation:
+  Ctrl+Tab / Ctrl+Shift+Tab  - Next/Previous tab
+  Alt+1-9                    - Go to tab N
+  Shift+PgUp/PgDn            - Scroll history
+
+Phase Control:
+  Ctrl+P / F8               - Toggle pause before next phase
+  Ctrl+R / F9               - Retry failed phase
+  Ctrl+S / F10              - Save logs to file
+  Ctrl+H / F1               - Show this help
+
+Application:
+  Ctrl+Q                    - Quit
+"""
+        self.notify(help_text, title="Help", timeout=10)
+
     async def on_key(self, event: Key) -> None:
         """Handle key events and route them to the active PTY.
 
@@ -832,6 +1012,8 @@ async def run_with_interactive_tabbed_ui(
     configs: dict[str, PluginConfig] | None = None,
     dry_run: bool = False,
     key_bindings: KeyBindings | None = None,
+    pause_phases: bool = False,
+    max_concurrent: int = 4,
 ) -> None:
     """Run plugins with the interactive tabbed UI.
 
@@ -844,6 +1026,8 @@ async def run_with_interactive_tabbed_ui(
         configs: Optional plugin configurations.
         dry_run: Whether to run in dry-run mode.
         key_bindings: Custom key bindings.
+        pause_phases: Whether to pause before each phase.
+        max_concurrent: Maximum number of concurrent operations.
     """
     if not is_pty_available():
         # Fall back to non-interactive mode
@@ -862,5 +1046,7 @@ async def run_with_interactive_tabbed_ui(
         configs=configs,
         dry_run=dry_run,
         key_bindings=key_bindings,
+        pause_phases=pause_phases,
+        max_concurrent=max_concurrent,
     )
     await app.run_async()

@@ -6,6 +6,7 @@ This module defines the Typer application and main commands.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -116,6 +117,24 @@ def run(
             help="Use interactive tabbed UI with live output for each plugin.",
         ),
     ] = False,
+    pause_phases: Annotated[
+        bool,
+        typer.Option(
+            "--pause-phases",
+            "-P",
+            help="Pause before each phase, requiring confirmation to proceed.",
+        ),
+    ] = False,
+    concurrency: Annotated[
+        int | None,
+        typer.Option(
+            "--concurrency",
+            "-j",
+            help="Maximum concurrent operations. Default: number of CPU cores.",
+            min=1,
+            max=32,
+        ),
+    ] = None,
 ) -> None:
     """Run system updates.
 
@@ -123,8 +142,27 @@ def run(
 
     Use --interactive (-i) for a tabbed interface that shows live output
     for each plugin and allows interaction (e.g., entering sudo password).
+
+    Use --pause-phases (-P) to pause before each phase (Update, Download, Upgrade),
+    requiring confirmation to proceed. This is useful for reviewing changes.
+
+    Use --concurrency (-j) to limit the number of concurrent operations.
+    Default is the number of CPU cores.
     """
-    asyncio.run(_run_updates(plugins, dry_run, verbose, continue_on_error, interactive))
+    # Calculate max concurrent from --concurrency or default to CPU count
+    max_concurrent = concurrency or os.cpu_count() or 4
+
+    asyncio.run(
+        _run_updates(
+            plugins,
+            dry_run,
+            verbose,
+            continue_on_error,
+            interactive,
+            pause_phases,
+            max_concurrent,
+        )
+    )
 
 
 async def _run_updates(
@@ -133,8 +171,20 @@ async def _run_updates(
     verbose: bool,  # noqa: ARG001
     continue_on_error: bool,  # noqa: ARG001
     interactive: bool = False,
+    pause_phases: bool = False,
+    max_concurrent: int = 4,
 ) -> None:
-    """Run updates asynchronously."""
+    """Run updates asynchronously.
+
+    Args:
+        plugin_names: List of plugin names to run, or None for all.
+        dry_run: Whether to simulate updates without making changes.
+        verbose: Enable verbose output (currently unused).
+        continue_on_error: Continue with remaining plugins after a failure.
+        interactive: Use interactive tabbed UI.
+        pause_phases: Pause before each phase, requiring confirmation.
+        max_concurrent: Maximum number of concurrent operations.
+    """
     from plugins import register_builtin_plugins
     from plugins.registry import PluginRegistry
 
@@ -173,6 +223,8 @@ async def _run_updates(
             plugins=plugins_to_run,
             configs=config.plugins,
             dry_run=dry_run,
+            pause_phases=pause_phases,
+            max_concurrent=max_concurrent,
         )
         return
 

@@ -92,6 +92,16 @@ DEFAULT_BINDINGS: dict[str, str] = {
     "scroll_down": "shift+pagedown",
     "scroll_top": "shift+home",
     "scroll_bottom": "shift+end",
+    # Phase control bindings (Phase 4 - Hot Keys and CLI)
+    # See docs/UI-revision-plan.md section 3.5
+    "pause_resume": "ctrl+p",
+    "pause_resume_alt": "f8",
+    "retry_phase": "ctrl+r",
+    "retry_phase_alt": "f9",
+    "save_logs": "ctrl+s",
+    "save_logs_alt": "f10",
+    "show_help": "ctrl+h",
+    # Note: F1 is already bound to "help" action above
 }
 
 # Navigation actions (keys that should be intercepted by the app, not sent to PTY)
@@ -114,6 +124,14 @@ NAVIGATION_ACTIONS = frozenset(
         "scroll_down",
         "scroll_top",
         "scroll_bottom",
+        # Phase control actions (Phase 4 - Hot Keys and CLI)
+        "pause_resume",
+        "pause_resume_alt",
+        "retry_phase",
+        "retry_phase_alt",
+        "save_logs",
+        "save_logs_alt",
+        "show_help",
     }
 )
 

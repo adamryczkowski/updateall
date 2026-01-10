@@ -1,7 +1,25 @@
-"""Tests for phase_status_bar module.
+"""Unit tests for phase_status_bar module.
 
-UI Revision Plan - Phase 3 Status Bar
-See docs/UI-revision-plan.md section 5.3
+This module contains unit tests for the PhaseStatusBar widget and related
+classes. These tests focus on the widget's functionality in isolation.
+
+Test Categories:
+    - PhaseMetrics: Tests for the PhaseMetrics dataclass
+    - MetricsSnapshot: Tests for the MetricsSnapshot dataclass
+    - MetricsCollector: Tests for the MetricsCollector class
+    - PhaseStatusBar: Tests for the PhaseStatusBar widget
+    - CSS: Tests for the PHASE_STATUS_BAR_CSS constant
+    - Factory: Tests for create_metrics_collector_for_pid
+    - Integration: Integration tests for PhaseStatusBar
+
+For regression tests related to bug fixes (phase counter reset, etc.),
+see test_regression_bugs.py.
+
+For E2E tests of phase stats preservation, see test_e2e_phase_stats_preservation.py.
+
+See Also:
+    - docs/UI-revision-plan.md section 5.3
+    - docs/bug-investigation-report.md
 """
 
 from __future__ import annotations

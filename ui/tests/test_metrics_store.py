@@ -1,7 +1,23 @@
-"""Tests for the MetricsStore class.
+"""Unit tests for the MetricsStore class.
 
-Milestone 3 - Textual Library Usage Review and Fixes
-See docs/cleanup-and-refactoring-plan.md section 3.3.1
+This module contains unit tests for the MetricsStore class, which provides
+persistent storage for phase metrics across PTY session lifecycles.
+
+The MetricsStore was introduced as part of the fix for Bug 1 and Bug 2
+(CPU statistics not updating, phase counters resetting). It provides a
+separate storage layer that persists metrics even when the MetricsCollector
+is stopped or recreated.
+
+Test Categories:
+    - PhaseSnapshot: Tests for the PhaseSnapshot dataclass
+    - AccumulatedMetrics: Tests for the AccumulatedMetrics dataclass
+    - MetricsStore: Tests for the MetricsStore class
+    - Integration: Integration tests with MetricsCollector
+
+See Also:
+    - test_regression_bugs.py for bug fix regression tests
+    - docs/cleanup-and-refactoring-plan.md section 3.3.1
+    - docs/bug-investigation-report.md
 """
 
 from __future__ import annotations

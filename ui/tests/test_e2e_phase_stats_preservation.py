@@ -1,12 +1,27 @@
 """E2E tests for phase statistics preservation across multi-phase execution.
 
-These tests replicate the actual bugs reported:
-1. CPU statistics not updating during CPU-bound tasks
-2. Phase counters reset when transitioning to a new phase
-3. Scrolling responsiveness issues (1s update loop)
+This module contains end-to-end tests that verify phase statistics are
+preserved correctly when running the full InteractiveTabbedApp with
+mock plugins. These tests complement the unit tests in test_regression_bugs.py
+by testing the complete application flow.
+
+Test Categories:
+    1. Unit Tests - See test_regression_bugs.py for isolated component tests
+    2. Integration Tests - See test_regression_bugs.py for component interaction tests
+    3. Regression Tests - See test_regression_bugs.py for bug fix verification
+    4. E2E Tests - This file tests full application flows
+
+Bugs Verified:
+    - Bug 1: CPU statistics not updating during CPU-bound tasks
+    - Bug 2: Phase counters reset when transitioning to a new phase
+    - Bug 3: Scrolling responsiveness issues (1s update loop)
 
 The tests use real multi-phase execution with mock plugins to verify
 that phase statistics are preserved across phase transitions.
+
+See Also:
+    - test_regression_bugs.py for unit/integration regression tests
+    - docs/bug-investigation-report.md for detailed bug analysis
 """
 
 from __future__ import annotations

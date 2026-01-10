@@ -1,14 +1,30 @@
-"""Tests for UI refresh rate issues.
+"""Tests for UI refresh rate configuration and behavior.
 
-This test suite verifies the root cause of the 1Hz UI refresh issue
-that causes laggy interactions with the app, such as scrolling the
-tab content or changing tabs.
+This module documents and tests the UI refresh rate behavior, specifically
+the metrics update interval configuration. These tests serve as documentation
+for the current architecture and potential improvements.
 
-Issue: Any UI refresh is about 1Hz, causing laggy experience.
-Root Cause: The metrics_update_interval defaults to 1.0 seconds.
+Architecture Notes:
+    The current architecture ties UI refresh to metrics collection, which
+    limits the maximum refresh rate. The MIN_UPDATE_INTERVAL of 0.5 seconds
+    means the maximum possible refresh rate for metrics is 2 Hz.
 
-Expected: UI refresh should be in the region of hundreds of Hz for
-smooth interactions.
+    To achieve higher refresh rates, the architecture would need to separate:
+    1. Metrics collection (can remain at 0.5-1.0 Hz)
+    2. UI rendering (should be 60+ Hz for smooth experience)
+
+Key Configuration:
+    - PaneConfig.metrics_update_interval: Default 1.0 seconds
+    - MetricsCollector.MIN_UPDATE_INTERVAL: 0.5 seconds (minimum allowed)
+
+Note:
+    Scroll operations themselves are synchronous and immediate.
+    The "laggy" feeling is from the status bar updating slowly, not
+    from scroll operations being slow.
+
+See Also:
+    - test_regression_bugs.py for scroll responsiveness tests
+    - docs/bug-investigation-report.md for detailed analysis
 """
 
 from __future__ import annotations

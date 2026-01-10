@@ -5,6 +5,8 @@ from a TerminalScreen (pyte wrapper) with full ANSI color and styling support.
 
 Phase 2 - Terminal Emulation
 See docs/interactive-tabs-implementation-plan.md section 3.2.1
+
+Enhanced with mouse wheel and arrow key scrolling support.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console, Group
 from rich.style import Style
 from rich.text import Text
+from textual.events import MouseScrollDown, MouseScrollUp  # noqa: TC002 - Required at runtime
 from textual.reactive import reactive
 from textual.strip import Strip
 from textual.widgets import Static
@@ -375,3 +378,28 @@ class TerminalView(Static):
             The terminal height in lines.
         """
         return self._terminal_screen.lines
+
+    # Mouse scroll event handlers for Task 2
+    def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        """Handle mouse scroll up event.
+
+        Scrolls the terminal history up when the mouse wheel scrolls up
+        while the cursor is over the terminal view.
+
+        Args:
+            event: The mouse scroll up event.
+        """
+        self.scroll_history_up(lines=3)
+        event.stop()
+
+    def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
+        """Handle mouse scroll down event.
+
+        Scrolls the terminal history down when the mouse wheel scrolls down
+        while the cursor is over the terminal view.
+
+        Args:
+            event: The mouse scroll down event.
+        """
+        self.scroll_history_down(lines=3)
+        event.stop()

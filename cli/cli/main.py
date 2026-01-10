@@ -985,5 +985,229 @@ def schedule_logs(
         console.print("[dim]No logs available[/dim]")
 
 
+# =============================================================================
+# Statistics Command (Task 3)
+# =============================================================================
+
+
+@app.command()
+def statistics(
+    days: Annotated[
+        int,
+        typer.Option(
+            "--days",
+            "-d",
+            help="Number of days to look back for statistics.",
+        ),
+    ] = 90,
+    plugin: Annotated[
+        str | None,
+        typer.Option(
+            "--plugin",
+            "-p",
+            help="Filter statistics for a specific plugin.",
+        ),
+    ] = None,
+    summary_only: Annotated[
+        bool,
+        typer.Option(
+            "--summary",
+            "-s",
+            help="Show summary statistics only (non-interactive).",
+        ),
+    ] = False,
+) -> None:
+    """View historical update statistics.
+
+    Launch an interactive TUI to browse through previous updates, downloads,
+    and upgrades with detailed metrics for each execution.
+
+    The view shows statistics in the format used by the statistical model,
+    allowing you to understand how the prediction system sees your data.
+
+    Examples:
+        update-all statistics              # Interactive viewer
+        update-all statistics --days 30   # Last 30 days only
+        update-all statistics --summary   # Non-interactive summary
+        update-all statistics -p apt      # Filter by plugin
+    """
+    if summary_only:
+        _show_statistics_summary(days, plugin)
+    else:
+        _run_statistics_viewer(days)
+
+
+def _show_statistics_summary(days: int, plugin_name: str | None) -> None:
+    """Show non-interactive statistics summary.
+
+    Args:
+        days: Number of days to look back.
+        plugin_name: Optional plugin name to filter by.
+    """
+    from stats.retrieval.queries import HistoricalDataQuery
+
+    query = HistoricalDataQuery()
+
+    console.print(f"[bold]Update Statistics[/bold] (last {days} days)")
+    console.print()
+
+    if plugin_name:
+        # Show stats for specific plugin
+        stats = query.get_plugin_stats(plugin_name, days=days)
+        if not stats:
+            console.print(f"[yellow]No statistics found for plugin '{plugin_name}'[/yellow]")
+            return
+
+        console.print(f"[cyan]Plugin: {stats.plugin_name}[/cyan]")
+        console.print()
+
+        table = Table(show_header=True)
+        table.add_column("Metric", style="bold")
+        table.add_column("Value", justify="right")
+
+        table.add_row("Executions", str(stats.execution_count))
+        table.add_row("Success Rate", f"{stats.success_rate:.1%}")
+        table.add_row("Successful", str(stats.success_count))
+        table.add_row("Failed", str(stats.failure_count))
+        table.add_row("Packages Updated", str(stats.total_packages_updated))
+
+        if stats.avg_wall_clock_seconds is not None:
+            table.add_row("Avg Wall Time", f"{stats.avg_wall_clock_seconds:.1f}s")
+        if stats.avg_cpu_seconds is not None:
+            table.add_row("Avg CPU Time", f"{stats.avg_cpu_seconds:.1f}s")
+        if stats.avg_download_bytes is not None:
+            table.add_row("Avg Download", _format_bytes(stats.avg_download_bytes))
+        if stats.avg_memory_peak_bytes is not None:
+            table.add_row("Avg Peak Memory", _format_bytes(stats.avg_memory_peak_bytes))
+
+        if stats.first_execution:
+            table.add_row("First Execution", stats.first_execution.strftime("%Y-%m-%d %H:%M"))
+        if stats.last_execution:
+            table.add_row("Last Execution", stats.last_execution.strftime("%Y-%m-%d %H:%M"))
+
+        console.print(table)
+
+        # Show recent executions
+        console.print()
+        console.print("[bold]Recent Executions[/bold]")
+        executions = query.get_recent_executions(plugin_name=plugin_name, limit=10)
+        _print_executions_table(executions)
+    else:
+        # Show summary for all plugins
+        all_stats = query.get_all_plugins_summary(days=days)
+
+        if not all_stats:
+            console.print("[yellow]No statistics available. Run some updates first![/yellow]")
+            return
+
+        table = Table(title="Plugin Statistics", show_header=True)
+        table.add_column("Plugin", style="cyan")
+        table.add_column("Runs", justify="right")
+        table.add_column("Success", justify="right")
+        table.add_column("Avg Time", justify="right")
+        table.add_column("Avg Download", justify="right")
+        table.add_column("Packages", justify="right")
+        table.add_column("Last Run")
+
+        for stats in all_stats:
+            success_rate = f"{stats.success_rate:.0%}"
+            avg_time = (
+                f"{stats.avg_wall_clock_seconds:.1f}s" if stats.avg_wall_clock_seconds else "N/A"
+            )
+            avg_download = (
+                _format_bytes(stats.avg_download_bytes) if stats.avg_download_bytes else "N/A"
+            )
+            last_run = stats.last_execution.strftime("%Y-%m-%d") if stats.last_execution else "N/A"
+
+            table.add_row(
+                stats.plugin_name,
+                str(stats.execution_count),
+                success_rate,
+                avg_time,
+                avg_download,
+                str(stats.total_packages_updated),
+                last_run,
+            )
+
+        console.print(table)
+
+        # Print totals
+        total_executions = sum(s.execution_count for s in all_stats)
+        total_success = sum(s.success_count for s in all_stats)
+        total_packages = sum(s.total_packages_updated for s in all_stats)
+        overall_rate = total_success / total_executions if total_executions > 0 else 0.0
+
+        console.print()
+        console.print("[bold]Totals:[/bold]")
+        console.print(f"  Plugins tracked: {len(all_stats)}")
+        console.print(f"  Total executions: {total_executions}")
+        console.print(f"  Overall success rate: {overall_rate:.1%}")
+        console.print(f"  Total packages updated: {total_packages}")
+
+
+def _print_executions_table(executions: list[dict[str, object]]) -> None:
+    """Print a table of executions.
+
+    Args:
+        executions: List of execution dictionaries.
+    """
+    if not executions:
+        console.print("[dim]No executions found[/dim]")
+        return
+
+    table = Table(show_header=True)
+    table.add_column("Date", style="dim")
+    table.add_column("Status")
+    table.add_column("Wall Time", justify="right")
+    table.add_column("Download", justify="right")
+    table.add_column("Packages", justify="right")
+
+    for execution in executions:
+        start_time = execution.get("start_time")
+        date_str = ""
+        if hasattr(start_time, "strftime"):
+            date_str = start_time.strftime("%Y-%m-%d %H:%M")
+
+        status = str(execution.get("status", ""))
+        status_style = "[green]✓[/green]" if status == "success" else "[red]✗[/red]"
+
+        wall_clock = execution.get("wall_clock_seconds")
+        wall_str = f"{wall_clock:.1f}s" if wall_clock is not None else "N/A"
+
+        download_bytes = execution.get("download_size_bytes")
+        download_str = _format_bytes(download_bytes) if download_bytes else "N/A"
+
+        packages = execution.get("packages_updated", 0)
+
+        table.add_row(date_str, status_style, wall_str, download_str, str(packages))
+
+    console.print(table)
+
+
+def _format_bytes(byte_count: int | float | None) -> str:
+    """Format byte count with appropriate unit."""
+    if byte_count is None:
+        return "N/A"
+    byte_count = int(byte_count)
+    if byte_count < 1024:
+        return f"{byte_count} B"
+    if byte_count < 1024 * 1024:
+        return f"{byte_count / 1024:.1f} KB"
+    if byte_count < 1024 * 1024 * 1024:
+        return f"{byte_count / (1024 * 1024):.1f} MB"
+    return f"{byte_count / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _run_statistics_viewer(days: int) -> None:
+    """Run the interactive statistics viewer.
+
+    Args:
+        days: Number of days to look back.
+    """
+    from ui.statistics_viewer import run_statistics_viewer
+
+    run_statistics_viewer(days=days)
+
+
 if __name__ == "__main__":
     app()

@@ -5,6 +5,11 @@ for each terminal pane, including status, ETA, resource usage, and progress.
 
 UI Revision Plan - Phase 3 Status Bar
 See docs/UI-revision-plan.md section 3.4
+
+Enhanced to 5-line display with statistics table showing:
+- Phase rows: Update, Download, Upgrade, Total
+- Columns: Phase, Time, Data, CPU Time, Wall Time, Packages, Peak Memory
+- Running progress summary with predictions
 """
 
 from __future__ import annotations
@@ -85,6 +90,48 @@ class PhaseMetrics:
 
 
 @dataclass
+class PhaseStats:
+    """Statistics for a single phase (Update/Download/Upgrade).
+
+    Attributes:
+        phase_name: Name of the phase.
+        wall_time_seconds: Wall clock time in seconds.
+        data_bytes: Data downloaded in bytes.
+        cpu_time_seconds: CPU time in seconds.
+        packages: Number of packages processed.
+        peak_memory_mb: Peak memory usage in MB.
+        is_complete: Whether the phase is complete.
+        is_running: Whether the phase is currently running.
+    """
+
+    phase_name: str
+    wall_time_seconds: float = 0.0
+    data_bytes: int = 0
+    cpu_time_seconds: float = 0.0
+    packages: int = 0
+    peak_memory_mb: float = 0.0
+    is_complete: bool = False
+    is_running: bool = False
+
+
+@dataclass
+class RunningProgress:
+    """Running progress summary with predictions.
+
+    Attributes:
+        predicted_wall_time_left: Predicted wall time remaining in seconds.
+        predicted_download_left: Predicted download size remaining in bytes.
+        cpu_time_so_far: CPU time consumed so far in seconds.
+        peak_memory_so_far: Peak memory usage so far in MB.
+    """
+
+    predicted_wall_time_left: float | None = None
+    predicted_download_left: int | None = None
+    cpu_time_so_far: float = 0.0
+    peak_memory_so_far: float = 0.0
+
+
+@dataclass
 class MetricsSnapshot:
     """A snapshot of system metrics at a point in time.
 
@@ -135,10 +182,24 @@ class MetricsCollector:
         self._running = False
         self._update_task: asyncio.Task[None] | None = None
 
+        # Per-phase statistics
+        self._phase_stats: dict[str, PhaseStats] = {
+            "Update": PhaseStats("Update"),
+            "Download": PhaseStats("Download"),
+            "Upgrade": PhaseStats("Upgrade"),
+        }
+        self._current_phase: str | None = None
+        self._phase_start_time: datetime | None = None
+
     @property
     def metrics(self) -> PhaseMetrics:
         """Get the current metrics."""
         return self._metrics
+
+    @property
+    def phase_stats(self) -> dict[str, PhaseStats]:
+        """Get per-phase statistics."""
+        return self._phase_stats
 
     def _get_process(self) -> psutil.Process | None:
         """Get or create the psutil Process object.
@@ -202,6 +263,104 @@ class MetricsCollector:
             self._update_task.cancel()
             self._update_task = None
 
+    def start_phase(self, phase_name: str) -> None:
+        """Start tracking a new phase.
+
+        Args:
+            phase_name: Name of the phase (Update, Download, Upgrade).
+        """
+        if phase_name in self._phase_stats:
+            self._current_phase = phase_name
+            self._phase_start_time = datetime.now(tz=UTC)
+            self._phase_stats[phase_name].is_running = True
+            self._phase_stats[phase_name].is_complete = False
+
+    def complete_phase(self, phase_name: str) -> None:
+        """Mark a phase as complete.
+
+        Args:
+            phase_name: Name of the phase (Update, Download, Upgrade).
+        """
+        if phase_name in self._phase_stats:
+            stats = self._phase_stats[phase_name]
+            stats.is_running = False
+            stats.is_complete = True
+            if self._phase_start_time:
+                elapsed = (datetime.now(tz=UTC) - self._phase_start_time).total_seconds()
+                stats.wall_time_seconds = elapsed
+            self._current_phase = None
+            self._phase_start_time = None
+
+    def update_phase_stats(
+        self,
+        phase_name: str,
+        *,
+        data_bytes: int | None = None,
+        cpu_time_seconds: float | None = None,
+        packages: int | None = None,
+        peak_memory_mb: float | None = None,
+    ) -> None:
+        """Update statistics for a specific phase.
+
+        Args:
+            phase_name: Name of the phase.
+            data_bytes: Data downloaded in bytes.
+            cpu_time_seconds: CPU time in seconds.
+            packages: Number of packages processed.
+            peak_memory_mb: Peak memory usage in MB.
+        """
+        if phase_name not in self._phase_stats:
+            return
+
+        stats = self._phase_stats[phase_name]
+        if data_bytes is not None:
+            stats.data_bytes = data_bytes
+        if cpu_time_seconds is not None:
+            stats.cpu_time_seconds = cpu_time_seconds
+        if packages is not None:
+            stats.packages = packages
+        if peak_memory_mb is not None:
+            stats.peak_memory_mb = max(stats.peak_memory_mb, peak_memory_mb)
+
+        # Update wall time if phase is running
+        if stats.is_running and self._phase_start_time:
+            stats.wall_time_seconds = (
+                datetime.now(tz=UTC) - self._phase_start_time
+            ).total_seconds()
+
+    def get_total_stats(self) -> PhaseStats:
+        """Get aggregated statistics across all phases.
+
+        Returns:
+            PhaseStats with totals (sum for most, max for peak memory).
+        """
+        total = PhaseStats("Total")
+        for stats in self._phase_stats.values():
+            total.wall_time_seconds += stats.wall_time_seconds
+            total.data_bytes += stats.data_bytes
+            total.cpu_time_seconds += stats.cpu_time_seconds
+            total.packages += stats.packages
+            total.peak_memory_mb = max(total.peak_memory_mb, stats.peak_memory_mb)
+        return total
+
+    def get_running_progress(self) -> RunningProgress:
+        """Get running progress summary with predictions.
+
+        Returns:
+            RunningProgress with current predictions.
+        """
+        total = self.get_total_stats()
+        return RunningProgress(
+            predicted_wall_time_left=self._metrics.eta_seconds,
+            predicted_download_left=(
+                self._metrics.projected_download_bytes - self._metrics.actual_download_bytes
+                if self._metrics.projected_download_bytes
+                else None
+            ),
+            cpu_time_so_far=total.cpu_time_seconds,
+            peak_memory_so_far=total.peak_memory_mb,
+        )
+
     def collect(self) -> PhaseMetrics:
         """Collect current metrics.
 
@@ -260,6 +419,15 @@ class MetricsCollector:
                 except Exception:
                     pass
 
+            # Update current phase stats
+            if self._current_phase:
+                self.update_phase_stats(
+                    self._current_phase,
+                    cpu_time_seconds=self._metrics.cpu_time_seconds,
+                    peak_memory_mb=self._metrics.memory_peak_mb,
+                    data_bytes=self._metrics.network_bytes,
+                )
+
             self._metrics.error_message = None
             self._last_update = datetime.now(tz=UTC)
 
@@ -303,13 +471,13 @@ class MetricsCollector:
         self._metrics.pause_after_phase = pause_after_phase
 
 
-# CSS styles for the phase status bar
+# CSS styles for the phase status bar (5 lines)
 PHASE_STATUS_BAR_CSS = """
-/* Phase Status Bar Styles */
+/* Phase Status Bar Styles - 5 lines with statistics table */
 /* See docs/UI-revision-plan.md section 3.4 */
 
 PhaseStatusBar {
-    height: 3;
+    height: 6;
     dock: bottom;
     padding: 0 1;
     background: $surface;
@@ -336,17 +504,32 @@ PhaseStatusBar .metrics-line {
 PhaseStatusBar .error-indicator {
     color: $error;
 }
+
+PhaseStatusBar .table-header {
+    color: $text;
+    text-style: bold;
+}
+
+PhaseStatusBar .phase-running {
+    color: $warning;
+}
+
+PhaseStatusBar .phase-complete {
+    color: $success;
+}
 """
 
 
 class PhaseStatusBar(Static):
-    """Status bar widget showing per-tab metrics.
+    """Status bar widget showing per-tab metrics in a 5-line table format.
 
     This widget displays runtime metrics for a terminal pane in a
-    three-line format:
-    - Line 1: Status and ETA
-    - Line 2: CPU, memory, and progress
-    - Line 3: Network, disk I/O, and CPU time
+    five-line format with a statistics table:
+    - Line 1: Table header (Phase | Time | Data | CPU | Wall | Pkgs | Mem)
+    - Line 2: Update phase row
+    - Line 3: Download phase row
+    - Line 4: Upgrade phase row
+    - Line 5: Total row + Running progress summary
 
     Example:
         status_bar = PhaseStatusBar(pane_id="apt")
@@ -419,75 +602,82 @@ class PhaseStatusBar(Static):
             self.metrics = self._metrics_collector.collect()
 
     def _refresh_display(self) -> None:
-        """Refresh the status bar content."""
+        """Refresh the status bar content with 5-line table format."""
         m = self.metrics
 
-        # Line 1: Status and ETA
-        pause_indicator = " [⏸ Pause after phase]" if m.pause_after_phase else ""
-        eta_str = self._format_eta(m.eta_seconds, m.eta_error_seconds)
-        line1 = f"Status: {m.status}{pause_indicator} | ETA: {eta_str}"
+        # Get phase stats from collector if available
+        if self._metrics_collector:
+            phase_stats = self._metrics_collector.phase_stats
+            total_stats = self._metrics_collector.get_total_stats()
+            progress = self._metrics_collector.get_running_progress()
+        else:
+            # Default empty stats
+            phase_stats = {
+                "Update": PhaseStats("Update"),
+                "Download": PhaseStats("Download"),
+                "Upgrade": PhaseStats("Upgrade"),
+            }
+            total_stats = PhaseStats("Total")
+            progress = RunningProgress()
 
-        # Line 2: Resource usage and download projections
-        items_str = self._format_items(m.items_completed, m.items_total)
-        download_str = self._format_download_stats(m)
-        line2 = (
-            f"CPU: {m.cpu_percent:.0f}% | "
-            f"Mem: {m.memory_mb:.0f}/{m.memory_peak_mb:.0f}MB (peak) | "
-            f"{items_str}"
+        # Build table header with column widths for alignment
+        header = (
+            f"{'Phase':<8} │ {'Time':>8} │ {'Data':>10} │ "
+            f"{'CPU':>8} │ {'Wall':>8} │ {'Pkgs':>6} │ {'Mem':>8}"
         )
 
-        # Line 3: Cumulative metrics and download sizes
-        net_str = self._format_bytes(m.network_bytes)
-        disk_str = self._format_bytes(m.disk_io_bytes)
-        cpu_time_str = self._format_duration(m.cpu_time_seconds)
-        line3 = f"Network: {net_str} ↓ | Disk I/O: {disk_str} | CPU Time: {cpu_time_str}"
+        # Format each phase row
+        def format_phase_row(stats: PhaseStats) -> str:
+            status_indicator = ""
+            if stats.is_running:
+                status_indicator = "▶"
+            elif stats.is_complete:
+                status_indicator = "✓"
 
-        # Add download projections if available
-        if download_str:
-            line3 += f" | {download_str}"
+            return (
+                f"{status_indicator}{stats.phase_name:<7} │ "
+                f"{self._format_duration(stats.wall_time_seconds):>8} │ "
+                f"{self._format_bytes(stats.data_bytes):>10} │ "
+                f"{self._format_duration(stats.cpu_time_seconds):>8} │ "
+                f"{self._format_duration(stats.wall_time_seconds):>8} │ "
+                f"{stats.packages:>6} │ "
+                f"{stats.peak_memory_mb:>6.0f}MB"
+            )
+
+        update_row = format_phase_row(phase_stats["Update"])
+        download_row = format_phase_row(phase_stats["Download"])
+        upgrade_row = format_phase_row(phase_stats["Upgrade"])
+
+        # Total row with running progress summary
+        total_row = format_phase_row(total_stats)
+
+        # Running progress summary (appended to display)
+        progress_parts = []
+        if progress.predicted_wall_time_left is not None:
+            progress_parts.append(
+                f"ETA: {self._format_duration(progress.predicted_wall_time_left)}"
+            )
+        if progress.predicted_download_left is not None and progress.predicted_download_left > 0:
+            progress_parts.append(
+                f"DL Left: {self._format_bytes(progress.predicted_download_left)}"
+            )
+        progress_parts.append(f"CPU: {self._format_duration(progress.cpu_time_so_far)}")
+        progress_parts.append(f"Peak: {progress.peak_memory_so_far:.0f}MB")
+
+        progress_summary = " │ ".join(progress_parts)
 
         # Add error indicator if needed
         if m.error_message:
-            line3 += f" | [red]⚠ {m.error_message}[/red]"
+            progress_summary += f" │ [red]⚠ {m.error_message}[/red]"
 
-        self.update(f"{line1}\n{line2}\n{line3}")
+        # Pause indicator
+        if m.pause_after_phase:
+            progress_summary += " │ [yellow]⏸ Pause[/yellow]"
 
-    def _format_download_stats(self, m: PhaseMetrics) -> str:
-        """Format download statistics with projections and actuals.
+        # Combine all lines
+        content = f"{header}\n{update_row}\n{download_row}\n{upgrade_row}\n{total_row} │ {progress_summary}"
 
-        Args:
-            m: PhaseMetrics containing download data.
-
-        Returns:
-            Formatted download stats string, or empty string if no data.
-        """
-        parts = []
-
-        # Update phase download
-        if m.projected_download_bytes is not None or m.actual_download_bytes > 0:
-            proj = (
-                self._format_bytes(m.projected_download_bytes)
-                if m.projected_download_bytes
-                else "?"
-            )
-            actual = (
-                self._format_bytes(m.actual_download_bytes)
-                if m.actual_download_bytes > 0
-                else "0 B"
-            )
-            parts.append(f"Update: {actual}/{proj}")
-
-        # Upgrade phase download
-        if m.projected_upgrade_bytes is not None or m.actual_upgrade_bytes > 0:
-            proj = (
-                self._format_bytes(m.projected_upgrade_bytes) if m.projected_upgrade_bytes else "?"
-            )
-            actual = (
-                self._format_bytes(m.actual_upgrade_bytes) if m.actual_upgrade_bytes > 0 else "0 B"
-            )
-            parts.append(f"Upgrade: {actual}/{proj}")
-
-        return " | ".join(parts) if parts else ""
+        self.update(content)
 
     def _format_eta(
         self,

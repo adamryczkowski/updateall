@@ -43,6 +43,11 @@ UI Revision Plan - Phase 5 Integration and Polish adds:
 - Performance optimization and benchmarks
 - Documentation updates with migration guide
 - See docs/UI-revision-plan.md section 4 Phase 5
+
+Task 3 - Statistics Viewer adds:
+- StatisticsViewerApp: Interactive TUI for viewing historical update statistics
+- run_statistics_viewer: Entry point for the statistics viewer
+- Available via: `update-all statistics`
 """
 
 from ui.event_handler import (
@@ -90,6 +95,7 @@ from ui.pty_session import (
     PTYSession,
     is_pty_available,
 )
+from ui.statistics_viewer import StatisticsViewerApp, run_statistics_viewer
 from ui.sudo import (
     SudoCheckResult,
     SudoKeepAlive,
@@ -151,6 +157,7 @@ __all__ = [
     "ResultsTable",
     "RouteTarget",
     "SessionNotFoundError",
+    "StatisticsViewerApp",
     "StreamEventAdapter",
     "StyledChar",
     "SudoCheckResult",
@@ -177,6 +184,7 @@ __all__ = [
     "is_pty_available",
     "normalize_key",
     "refresh_sudo_timestamp",
+    "run_statistics_viewer",
     "run_with_interactive_tabbed_ui",
     "run_with_tabbed_ui",
 ]

@@ -481,6 +481,7 @@ PhaseStatusBar {
     dock: bottom;
     padding: 0 1;
     background: $surface;
+    color: $text;
     border-top: solid $primary;
 }
 
@@ -494,6 +495,7 @@ PhaseStatusBar.paused {
 
 PhaseStatusBar .status-line {
     width: 100%;
+    color: $text;
 }
 
 PhaseStatusBar .metrics-line {

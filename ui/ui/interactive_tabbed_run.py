@@ -261,10 +261,17 @@ class InteractiveTabbedApp(App[None]):
         Binding("ctrl+shift+tab", "previous_tab", "Previous Tab", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("f1", "help", "Help", show=False),
+        # Scroll bindings - support multiple key combinations
         Binding("shift+pageup", "scroll_up", "Scroll Up", show=False),
         Binding("shift+pagedown", "scroll_down", "Scroll Down", show=False),
+        Binding("pageup", "scroll_up", "Scroll Up", show=False),
+        Binding("pagedown", "scroll_down", "Scroll Down", show=False),
+        Binding("up", "scroll_line_up", "Scroll Line Up", show=False),
+        Binding("down", "scroll_line_down", "Scroll Line Down", show=False),
         Binding("shift+home", "scroll_top", "Scroll Top", show=False),
         Binding("shift+end", "scroll_bottom", "Scroll Bottom", show=False),
+        Binding("home", "scroll_top", "Scroll Top", show=False),
+        Binding("end", "scroll_bottom", "Scroll Bottom", show=False),
         # Alt+number for direct tab access
         Binding("alt+1", "goto_tab_1", "Tab 1", show=False),
         Binding("alt+2", "goto_tab_2", "Tab 2", show=False),
@@ -766,6 +773,17 @@ class InteractiveTabbedApp(App[None]):
 
         try:
             await pane.start()
+
+            # Start phase tracking in the metrics collector for live updates
+            if pane.metrics_collector:
+                # Map Phase to phase name for metrics tracking
+                phase_name_map = {
+                    Phase.CHECK: "Update",
+                    Phase.DOWNLOAD: "Download",
+                    Phase.EXECUTE: "Upgrade",
+                }
+                phase_name = phase_name_map.get(current_phase, "Update")
+                pane.metrics_collector.start_phase(phase_name)
         except Exception as e:
             # Handle startup errors gracefully - display in the tab
             error_msg = str(e)
@@ -893,6 +911,9 @@ class InteractiveTabbedApp(App[None]):
         # Get current phase from PhaseController
         current_phase = self._phase_controller.get_current_phase(plugin_name)
 
+        # Get the pane for metrics collector updates
+        pane = self.terminal_panes.get(plugin_name)
+
         # Handle phase completion
         if message.state == PaneState.SUCCESS:
             # Phase completed successfully
@@ -902,6 +923,16 @@ class InteractiveTabbedApp(App[None]):
                     current_phase,
                     success=True,
                 )
+
+                # Complete phase tracking in the metrics collector
+                if pane and pane.metrics_collector:
+                    phase_name_map = {
+                        Phase.CHECK: "Update",
+                        Phase.DOWNLOAD: "Download",
+                        Phase.EXECUTE: "Upgrade",
+                    }
+                    phase_name = phase_name_map.get(current_phase, "Update")
+                    pane.metrics_collector.complete_phase(phase_name)
 
                 # Check if there are more phases
                 next_phase = self._phase_controller.get_current_phase(plugin_name)
@@ -957,6 +988,16 @@ class InteractiveTabbedApp(App[None]):
                     success=False,
                     error=tab_data.error_message,
                 )
+
+                # Complete phase tracking in the metrics collector
+                if pane and pane.metrics_collector:
+                    phase_name_map = {
+                        Phase.CHECK: "Update",
+                        Phase.DOWNLOAD: "Download",
+                        Phase.EXECUTE: "Upgrade",
+                    }
+                    phase_name = phase_name_map.get(current_phase, "Update")
+                    pane.metrics_collector.complete_phase(phase_name)
             tab_data.end_time = datetime.now(tz=UTC)
 
         elif message.state == PaneState.EXITED:
@@ -1153,14 +1194,24 @@ class InteractiveTabbedApp(App[None]):
 
     # Scroll actions
     def action_scroll_up(self) -> None:
-        """Scroll up in the active terminal."""
+        """Scroll up in the active terminal (page)."""
         if self.active_pane:
             self.active_pane.scroll_history_up(5)
 
     def action_scroll_down(self) -> None:
-        """Scroll down in the active terminal."""
+        """Scroll down in the active terminal (page)."""
         if self.active_pane:
             self.active_pane.scroll_history_down(5)
+
+    def action_scroll_line_up(self) -> None:
+        """Scroll up one line in the active terminal."""
+        if self.active_pane:
+            self.active_pane.scroll_history_up(1)
+
+    def action_scroll_line_down(self) -> None:
+        """Scroll down one line in the active terminal."""
+        if self.active_pane:
+            self.active_pane.scroll_history_down(1)
 
     def action_scroll_top(self) -> None:
         """Scroll to top of history."""

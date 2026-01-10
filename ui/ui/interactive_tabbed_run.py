@@ -363,8 +363,8 @@ class InteractiveTabbedApp(App[None]):
     @property
     def active_pane(self) -> TerminalPane | None:
         """Get the currently active terminal pane."""
-        # Use internal attribute to avoid triggering reactive watcher
-        index = getattr(self, "_reactive_active_tab_index", 0)
+        # Access the reactive property value directly
+        index = self.active_tab_index
         if index < len(self.plugins):
             plugin_name = self.plugins[index].name
             return self.terminal_panes.get(plugin_name)

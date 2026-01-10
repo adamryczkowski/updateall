@@ -275,12 +275,16 @@ class MetricsCollector:
             phase_name: Name of the phase (Update, Download, Upgrade).
         """
         if phase_name in self._phase_stats:
+            # Collect current metrics first to ensure we have up-to-date values
+            self.collect()
+
             self._current_phase = phase_name
             self._phase_start_time = datetime.now(tz=UTC)
             self._phase_stats[phase_name].is_running = True
             self._phase_stats[phase_name].is_complete = False
 
             # Record starting CPU time and network bytes for per-phase calculation
+            # These are now up-to-date after the collect() call above
             self._phase_start_cpu_time = self._metrics.cpu_time_seconds
             self._phase_start_network_bytes = self._metrics.network_bytes
 
@@ -384,35 +388,57 @@ class MetricsCollector:
         if not self._running:
             return self._metrics
 
-        process = self._get_process()
-        if process is None:
-            self._metrics.error_message = "Process not accessible"
-            return self._metrics
-
         try:
             import psutil
 
-            # CPU percent (since last call)
-            try:
-                self._metrics.cpu_percent = process.cpu_percent()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                self._metrics.cpu_percent = 0.0
+            # Try to get process-specific metrics first
+            process = self._get_process()
 
-            # Memory usage
+            # CPU percent (since last call) - try process first, fall back to system
             try:
-                mem_info = process.memory_info()
-                self._metrics.memory_mb = mem_info.rss / (1024 * 1024)
+                if process:
+                    self._metrics.cpu_percent = process.cpu_percent()
+                else:
+                    self._metrics.cpu_percent = psutil.cpu_percent()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                self._metrics.cpu_percent = psutil.cpu_percent()
+
+            # Memory usage - try process first, fall back to system
+            try:
+                if process:
+                    mem_info = process.memory_info()
+                    self._metrics.memory_mb = mem_info.rss / (1024 * 1024)
+                else:
+                    mem = psutil.virtual_memory()
+                    self._metrics.memory_mb = mem.used / (1024 * 1024)
                 self._peak_memory_mb = max(self._peak_memory_mb, self._metrics.memory_mb)
                 self._metrics.memory_peak_mb = self._peak_memory_mb
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+                mem = psutil.virtual_memory()
+                self._metrics.memory_mb = mem.used / (1024 * 1024)
+                self._peak_memory_mb = max(self._peak_memory_mb, self._metrics.memory_mb)
+                self._metrics.memory_peak_mb = self._peak_memory_mb
 
-            # CPU time
+            # CPU time - try process first, fall back to system-wide
             try:
-                cpu_times = process.cpu_times()
-                self._metrics.cpu_time_seconds = cpu_times.user + cpu_times.system
+                if process:
+                    cpu_times = process.cpu_times()
+                    self._metrics.cpu_time_seconds = cpu_times.user + cpu_times.system
+                else:
+                    # Use system-wide CPU times as fallback
+                    cpu_times = psutil.cpu_times()
+                    # Calculate elapsed CPU time since baseline
+                    if self._baseline:
+                        elapsed = (datetime.now(tz=UTC) - self._baseline.timestamp).total_seconds()
+                        # Estimate CPU time based on CPU percent and elapsed time
+                        self._metrics.cpu_time_seconds = elapsed * (
+                            self._metrics.cpu_percent / 100.0
+                        )
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+                # Use elapsed time * CPU percent as estimate
+                if self._baseline:
+                    elapsed = (datetime.now(tz=UTC) - self._baseline.timestamp).total_seconds()
+                    self._metrics.cpu_time_seconds = elapsed * (self._metrics.cpu_percent / 100.0)
 
             # Network and disk I/O (system-wide, calculate delta from baseline)
             if self._baseline:

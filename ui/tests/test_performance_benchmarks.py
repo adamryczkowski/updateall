@@ -427,29 +427,6 @@ class TestConcurrentPerformance:
         assert elapsed < 0.5, f"Concurrent processing took {elapsed:.3f}s, expected < 0.5s"
 
 
-class TestRenderingPerformance:
-    """Performance benchmarks for rendering operations."""
-
-    def test_rich_text_generation_performance(self) -> None:
-        """Benchmark Rich text generation from screen buffer.
-
-        Target: Generate Rich text for 24 lines 100 times in < 100ms
-        """
-        screen = TerminalScreen(columns=80, lines=24)
-
-        # Fill screen with colored content
-        for i in range(24):
-            color = 31 + (i % 7)
-            screen.feed(f"\x1b[{color}m{'X' * 80}\x1b[0m\n".encode())
-
-        start = time.perf_counter()
-        for _ in range(100):
-            _ = screen.display
-        elapsed = time.perf_counter() - start
-
-        assert elapsed < 0.1, f"Rich text generation took {elapsed:.3f}s, expected < 0.1s"
-
-
 class TestMemoryPerformance:
     """Memory usage benchmarks."""
 

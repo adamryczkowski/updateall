@@ -1,4 +1,17 @@
-"""Snap package manager plugin."""
+"""Snap package manager plugin.
+
+This plugin updates Snap packages on Ubuntu and other distributions
+that support the Snap package format.
+
+Official documentation:
+- Snapcraft: https://snapcraft.io/
+- snap command: https://snapcraft.io/docs/getting-started
+
+Update mechanism:
+- snap refresh: Refreshes all installed snaps to their latest versions
+
+Note: Requires sudo privileges for refresh operations.
+"""
 
 from __future__ import annotations
 

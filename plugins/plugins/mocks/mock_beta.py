@@ -8,6 +8,13 @@ This plugin simulates a long-running update task with three phases:
 Uses external shell scripts that generate REAL CPU, memory, and network load
 to test update-all's resource estimation capabilities.
 Different visual styling than Mock Alpha for easy differentiation.
+
+Usage:
+    # Run with only mock plugins for debugging
+    just run-mock-interactive
+
+    # Or set environment variable
+    UPDATE_ALL_DEBUG_MOCK_ONLY=1 poetry run update-all run --interactive
 """
 
 from __future__ import annotations
@@ -28,6 +35,18 @@ class MockBetaPlugin(BasePlugin):
     Simulates a multi-phase update with REAL download and CPU load.
     Uses external shell scripts that spawn child processes.
     Different parameters than Mock Alpha for varied load testing.
+
+    Attributes:
+        name: Plugin identifier ("mock-beta")
+        command: Base command used ("bash")
+        description: Human-readable description
+
+    Example:
+        >>> plugin = MockBetaPlugin()
+        >>> plugin.name
+        'mock-beta'
+        >>> await plugin.check_available()
+        True
     """
 
     @property
@@ -50,8 +69,13 @@ class MockBetaPlugin(BasePlugin):
         return True
 
     def _get_scripts_dir(self) -> Path:
-        """Get the path to the scripts directory."""
-        return Path(__file__).parent / "scripts"
+        """Get the path to the scripts directory.
+
+        Returns:
+            Path to the plugins/plugins/scripts directory.
+        """
+        # Scripts are in the parent directory (plugins/plugins/scripts/)
+        return Path(__file__).parent.parent / "scripts"
 
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.

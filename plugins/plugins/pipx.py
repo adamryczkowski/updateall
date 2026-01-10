@@ -1,4 +1,16 @@
-"""Pipx package manager plugin."""
+"""Pipx package manager plugin.
+
+This plugin updates Python applications installed via pipx.
+
+Official documentation:
+- pipx: https://pypa.github.io/pipx/
+- pipx upgrade-all: https://pypa.github.io/pipx/docs/#pipx-upgrade-all
+
+Update mechanism:
+- pipx upgrade-all: Upgrades all installed applications to their latest versions
+
+Note: pipx installs each application in its own isolated virtual environment.
+"""
 
 from __future__ import annotations
 

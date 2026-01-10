@@ -1,4 +1,18 @@
-"""Cargo (Rust) package manager plugin."""
+"""Cargo (Rust) package manager plugin.
+
+This plugin updates globally installed Rust crates using cargo-update.
+
+Official documentation:
+- Cargo: https://doc.rust-lang.org/cargo/
+- cargo-update: https://github.com/nabijaczleweli/cargo-update
+
+Prerequisites:
+- cargo-update must be installed: cargo install cargo-update
+
+Update mechanism:
+- cargo install-update -l: Lists packages with available updates
+- cargo install-update -a: Updates all installed crates
+"""
 
 from __future__ import annotations
 

@@ -1,6 +1,29 @@
 """Update-All Plugins package.
 
-This package contains plugin implementations for various package managers.
+This package contains plugin implementations for various package managers
+and applications. Plugins are organized into categories:
+
+Production Plugins:
+    - System package managers: apt, flatpak, snap
+    - Language package managers: cargo, npm, pip, pipx, poetry, rustup
+    - Conda ecosystem: conda_self, conda_packages, conda_build, conda_clean
+    - Go ecosystem: go_runtime, go_packages
+    - Julia ecosystem: julia_runtime, julia_packages
+    - TeX Live: texlive_self, texlive_packages
+    - Applications: atuin, calibre, foot, lxc, pihole, r, spack, steam,
+                   waterfox, youtube_dl, yt_dlp
+
+Mock/Debug Plugins (in plugins.mocks subpackage):
+    - mock_alpha, mock_beta: For debugging interactive UI
+
+Environment Variables:
+    UPDATE_ALL_DEBUG_MOCK_ONLY: Set to "1" to use only mock plugins for debugging.
+
+Usage:
+    from plugins import get_registry, register_builtin_plugins
+
+    registry = register_builtin_plugins()
+    plugins = registry.get_all()
 """
 
 from __future__ import annotations
@@ -23,8 +46,7 @@ from plugins.go_runtime import GoRuntimePlugin
 from plugins.julia_packages import JuliaPackagesPlugin
 from plugins.julia_runtime import JuliaRuntimePlugin
 from plugins.lxc import LxcPlugin
-from plugins.mock_alpha import MockAlphaPlugin
-from plugins.mock_beta import MockBetaPlugin
+from plugins.mocks import MockAlphaPlugin, MockBetaPlugin
 from plugins.npm import NpmPlugin
 from plugins.pihole import PiholePlugin
 from plugins.pip import PipPlugin
@@ -119,7 +141,9 @@ __all__ = [
     "register_builtin_plugins",
 ]
 
-# Set this environment variable to "1" to use only mock plugins for debugging
+# Set this environment variable to "1" to use only mock plugins for debugging.
+# This is useful for testing the interactive UI without running real updates.
+# Usage: UPDATE_ALL_DEBUG_MOCK_ONLY=1 poetry run update-all run --interactive
 DEBUG_MOCK_PLUGINS_ONLY = os.environ.get("UPDATE_ALL_DEBUG_MOCK_ONLY", "0") == "1"
 
 
@@ -134,6 +158,11 @@ def register_builtin_plugins(registry: PluginRegistry | None = None) -> PluginRe
 
     Returns:
         The registry with built-in plugins registered.
+
+    Example:
+        >>> registry = register_builtin_plugins()
+        >>> len(registry.list_names()) > 0
+        True
     """
     if registry is None:
         registry = get_registry()

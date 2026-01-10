@@ -1,4 +1,16 @@
-"""Flatpak package manager plugin."""
+"""Flatpak package manager plugin.
+
+This plugin updates Flatpak applications installed on the system.
+
+Official documentation:
+- Flatpak: https://flatpak.org/
+- flatpak command: https://docs.flatpak.org/en/latest/flatpak-command-reference.html
+
+Update mechanism:
+- flatpak update -y: Updates all installed applications and runtimes
+
+Note: Flatpak can run as a regular user (no sudo required).
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,17 @@
-"""NPM (Node.js) package manager plugin."""
+"""NPM (Node.js) package manager plugin.
+
+This plugin updates globally installed NPM packages.
+
+Official documentation:
+- NPM: https://docs.npmjs.com/
+- npm update: https://docs.npmjs.com/cli/commands/npm-update
+
+Update mechanism:
+- npm outdated -g: Lists outdated global packages
+- npm update -g: Updates all globally installed packages
+
+Note: Works with both system npm and version managers (nvm, fnm, volta).
+"""
 
 from __future__ import annotations
 

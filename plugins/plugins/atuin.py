@@ -1,4 +1,18 @@
-"""Atuin shell history sync plugin."""
+"""Atuin shell history sync plugin.
+
+This plugin synchronizes shell history using Atuin, a shell history tool
+that syncs history across machines with end-to-end encryption.
+
+Official documentation:
+- Atuin: https://atuin.sh/
+- GitHub: https://github.com/atuinsh/atuin
+
+Sync mechanism:
+- atuin sync: Synchronizes shell history with the Atuin server
+
+Note: This is a sync operation, not a traditional package update.
+History is encrypted end-to-end, so the server operator cannot see commands.
+"""
 
 from __future__ import annotations
 

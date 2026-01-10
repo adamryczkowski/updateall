@@ -1,4 +1,28 @@
-"""Plugin registry for discovering and managing plugins."""
+"""Plugin registry for discovering and managing plugins.
+
+This module provides a central registry for plugin discovery and management.
+Plugins can be registered manually or discovered automatically via entry points.
+
+Key Components:
+    PluginRegistry: Central registry for plugin classes
+    get_registry(): Get the global registry instance
+
+Usage:
+    from plugins import get_registry, register_builtin_plugins
+
+    # Register all built-in plugins
+    registry = register_builtin_plugins()
+
+    # Get a specific plugin
+    apt_plugin = registry.get("apt")
+
+    # List all registered plugins
+    names = registry.list_names()
+
+Entry Points:
+    External plugins can be discovered via the 'update_all.plugins' entry point
+    group. See the plugin development documentation for details.
+"""
 
 from __future__ import annotations
 

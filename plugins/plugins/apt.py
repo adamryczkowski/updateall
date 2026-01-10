@@ -1,4 +1,18 @@
-"""APT package manager plugin."""
+"""APT package manager plugin.
+
+This plugin updates system packages using APT (Advanced Package Tool)
+on Debian-based distributions (Debian, Ubuntu, Linux Mint, etc.).
+
+Official documentation:
+- APT: https://wiki.debian.org/Apt
+- apt command: https://manpages.debian.org/apt
+
+Update mechanism:
+- apt update: Refreshes package lists from repositories
+- apt upgrade -y: Upgrades all installed packages
+
+Note: Requires sudo privileges for both update and upgrade operations.
+"""
 
 from __future__ import annotations
 

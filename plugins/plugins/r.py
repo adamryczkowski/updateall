@@ -1,4 +1,18 @@
-"""R packages plugin for CRAN package updates."""
+"""R packages plugin for CRAN package updates.
+
+This plugin updates R packages from CRAN (Comprehensive R Archive Network).
+
+Official documentation:
+- R: https://www.r-project.org/
+- CRAN: https://cran.r-project.org/
+- update.packages(): https://stat.ethz.ch/R-manual/R-devel/library/utils/html/update.packages.html
+
+Update mechanism:
+- update.packages(ask=FALSE, checkBuilt=TRUE): Updates all installed packages
+
+Note: Uses user library to avoid permission issues. Automatically rebuilds
+packages that were built with older R versions.
+"""
 
 from __future__ import annotations
 

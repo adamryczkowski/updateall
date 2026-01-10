@@ -630,11 +630,20 @@ class TerminalPane(Container):
 
         This task runs while the PTY session is active and updates the
         phase status bar with current metrics at regular intervals.
+
+        The metrics collection is run in a separate thread using
+        asyncio.to_thread() to ensure it continues to run even when
+        the main event loop is busy with CPU-bound work. This fixes
+        the issue where CPU statistics would not update during
+        CPU-intensive operations.
         """
         try:
             while self._state == PaneState.RUNNING:
                 if self._metrics_collector and self._phase_status_bar:
-                    self._phase_status_bar.collect_and_update()
+                    # Run metrics collection in a thread to avoid blocking
+                    # the event loop and ensure updates continue during
+                    # CPU-bound operations
+                    await asyncio.to_thread(self._collect_metrics_sync)
                 await asyncio.sleep(self.config.metrics_update_interval)
         except asyncio.CancelledError:
             pass
@@ -649,7 +658,18 @@ class TerminalPane(Container):
                 final_status = status_map.get(self._state, "Stopped")
                 self._metrics_collector.update_status(final_status)
                 if self._phase_status_bar:
-                    self._phase_status_bar.collect_and_update()
+                    # Final update also in thread for consistency
+                    await asyncio.to_thread(self._collect_metrics_sync)
+
+    def _collect_metrics_sync(self) -> None:
+        """Synchronously collect metrics and update the status bar.
+
+        This method is designed to be called from a thread via
+        asyncio.to_thread() to ensure metrics collection doesn't
+        block the event loop.
+        """
+        if self._phase_status_bar:
+            self._phase_status_bar.collect_and_update()
 
     def update_phase_metrics(
         self,

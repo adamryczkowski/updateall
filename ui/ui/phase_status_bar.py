@@ -317,6 +317,7 @@ class MetricsCollector:
         cpu_time_seconds: float | None = None,
         packages: int | None = None,
         peak_memory_mb: float | None = None,
+        force: bool = False,
     ) -> None:
         """Update statistics for a specific phase.
 
@@ -326,11 +327,19 @@ class MetricsCollector:
             cpu_time_seconds: CPU time in seconds.
             packages: Number of packages processed.
             peak_memory_mb: Peak memory usage in MB.
+            force: If True, update even if phase is complete (default: False).
         """
         if phase_name not in self._phase_stats:
             return
 
         stats = self._phase_stats[phase_name]
+
+        # Don't update completed phases unless force is True
+        # This fixes the issue where phase counters were reset when
+        # transitioning to a new phase
+        if stats.is_complete and not force:
+            return
+
         if data_bytes is not None:
             stats.data_bytes = data_bytes
         if cpu_time_seconds is not None:

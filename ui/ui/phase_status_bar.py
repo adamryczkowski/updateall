@@ -620,28 +620,48 @@ class PhaseStatusBar(Static):
             total_stats = PhaseStats("Total")
             progress = RunningProgress()
 
+        # Column widths for consistent alignment
+        # Phase: 10 chars (includes 2-char status indicator space)
+        # Time: 8 chars, Data: 10 chars, CPU: 8 chars, Wall: 8 chars, Pkgs: 6 chars, Mem: 8 chars
+        col_phase = 10
+        col_time = 8
+        col_data = 10
+        col_cpu = 8
+        col_wall = 8
+        col_pkgs = 6
+        col_mem = 8
+
         # Build table header with column widths for alignment
         header = (
-            f"{'Phase':<8} │ {'Time':>8} │ {'Data':>10} │ "
-            f"{'CPU':>8} │ {'Wall':>8} │ {'Pkgs':>6} │ {'Mem':>8}"
+            f"{'Phase':<{col_phase}} │ {'Time':>{col_time}} │ {'Data':>{col_data}} │ "
+            f"{'CPU':>{col_cpu}} │ {'Wall':>{col_wall}} │ {'Pkgs':>{col_pkgs}} │ {'Mem':>{col_mem}}"
         )
 
         # Format each phase row
         def format_phase_row(stats: PhaseStats) -> str:
-            status_indicator = ""
+            # Status indicator: 2 chars (indicator + space, or 2 spaces)
             if stats.is_running:
-                status_indicator = "▶"
+                status_indicator = "▶ "
             elif stats.is_complete:
-                status_indicator = "✓"
+                status_indicator = "✓ "
+            else:
+                status_indicator = "  "
+
+            # Phase name: remaining chars after status indicator
+            phase_width = col_phase - 2
+            phase_cell = f"{status_indicator}{stats.phase_name:<{phase_width}}"
+
+            # Format memory with consistent width
+            mem_str = f"{stats.peak_memory_mb:.0f}MB"
 
             return (
-                f"{status_indicator}{stats.phase_name:<7} │ "
-                f"{self._format_duration(stats.wall_time_seconds):>8} │ "
-                f"{self._format_bytes(stats.data_bytes):>10} │ "
-                f"{self._format_duration(stats.cpu_time_seconds):>8} │ "
-                f"{self._format_duration(stats.wall_time_seconds):>8} │ "
-                f"{stats.packages:>6} │ "
-                f"{stats.peak_memory_mb:>6.0f}MB"
+                f"{phase_cell} │ "
+                f"{self._format_duration(stats.wall_time_seconds):>{col_time}} │ "
+                f"{self._format_bytes(stats.data_bytes):>{col_data}} │ "
+                f"{self._format_duration(stats.cpu_time_seconds):>{col_cpu}} │ "
+                f"{self._format_duration(stats.wall_time_seconds):>{col_wall}} │ "
+                f"{stats.packages:>{col_pkgs}} │ "
+                f"{mem_str:>{col_mem}}"
             )
 
         update_row = format_phase_row(phase_stats["Update"])

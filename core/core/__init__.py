@@ -1,6 +1,36 @@
 """Update-All Core Library.
 
 Core library providing models, interfaces, and utilities for the update-all system.
+
+This package contains the foundational components used by all other update-all
+subprojects (cli, plugins, ui, stats).
+
+Module Overview:
+    config: YAML-based configuration management (XDG spec compliant)
+    download_manager: Centralized download handling with progress, retry, caching
+    interfaces: Abstract base classes for plugins and executors
+    metrics: Production observability metrics with alert thresholds
+    models: Pydantic data models for configuration and execution results
+    mutex: Mutex system for coordinating plugin execution
+    notifications: Desktop notification support via notify-send
+    orchestrator: Sequential plugin execution
+    parallel_orchestrator: Parallel plugin execution with DAG scheduling
+    remote: SSH-based remote execution via asyncssh
+    resource: Resource limits (CPU, memory, bandwidth)
+    rollback: Snapshot and rollback support for failed updates
+    schedule: Systemd timer integration for scheduled updates
+    scheduler: DAG-based scheduling for plugin dependencies
+    streaming: Streaming event types for live plugin output
+    sudo: Sudo declaration and sudoers file generation
+    version: Version parsing and comparison utilities
+
+Orchestrator Selection:
+    - Use Orchestrator for simple sequential execution
+    - Use ParallelOrchestrator for parallel execution with mutex/resource management
+
+Metrics Distinction:
+    - core.metrics: Production observability (alert thresholds, SLO tracking)
+    - ui.metrics: UI display (runtime stats in status bar)
 """
 
 from importlib.metadata import version as get_package_version

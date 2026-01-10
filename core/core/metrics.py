@@ -11,6 +11,25 @@ Metrics tracked:
 - Plugin execution time
 - Streaming event throughput
 
+This module is for **production observability** - tracking system health,
+detecting performance issues, and triggering alerts when thresholds are exceeded.
+
+Key differences from ui.metrics:
+    - Purpose: Production monitoring vs. UI display
+    - Scope: System-wide health vs. per-process runtime stats
+    - Thresholds: Configurable alert levels vs. display formatting
+    - Usage: Backend monitoring vs. status bar display
+
+Use this module when:
+    - Monitoring system health in production
+    - Tracking performance against SLO targets
+    - Implementing alerting for threshold violations
+    - Collecting metrics for external monitoring systems
+
+See Also:
+    ui.metrics: For runtime metrics displayed in the UI status bar
+        (CPU, memory, network usage during plugin execution).
+
 Phase 5 - Polish, Testing & Documentation (Section 7.5.4)
 See docs/update-all-architecture-refinement-plan.md
 """

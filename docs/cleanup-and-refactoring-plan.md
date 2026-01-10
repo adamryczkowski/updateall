@@ -301,23 +301,26 @@ ui/ui/
 
 **Goal:** Clean up and simplify the core module.
 
+**Status:** ✅ COMPLETE (January 10, 2025)
+
 **Estimated Effort:** 2-3 days
+**Actual Effort:** < 0.5 day
 
 ### 5.1 Module Analysis
 
 **Current Core Module Structure:**
 ```
 core/core/
-├── __init__.py           # Package exports (215 lines)
+├── __init__.py           # Package exports (240+ lines with enhanced docstring)
 ├── config.py             # Configuration management
 ├── download_manager.py   # Download management
 ├── interfaces.py         # Abstract interfaces
-├── metrics.py            # Metrics collection
+├── metrics.py            # Production observability metrics
 ├── models.py             # Data models
 ├── mutex.py              # Mutex management
 ├── notifications.py      # Notification system
-├── orchestrator.py       # Sequential orchestrator
-├── parallel_orchestrator.py # Parallel orchestrator
+├── orchestrator.py       # Sequential orchestrator (documented)
+├── parallel_orchestrator.py # Parallel orchestrator (documented)
 ├── remote.py             # Remote execution
 ├── resource.py           # Resource management
 ├── rollback.py           # Rollback functionality
@@ -334,17 +337,52 @@ core/core/
 2. **Large `__init__.py`** - 215 lines of exports
 3. **`metrics.py` in core** vs `MetricsCollector` in UI - potential confusion
 
-### 5.3 Proposed Actions
+### 5.3 Completed Actions
 
-- [ ] Review `orchestrator.py` vs `parallel_orchestrator.py` for consolidation
-- [ ] Add clear docstrings to each module explaining its purpose
-- [ ] Ensure `core.metrics` and `ui.phase_status_bar.MetricsCollector` have distinct purposes
-- [ ] Review and clean up unused exports in `__init__.py`
+- [x] Review `orchestrator.py` vs `parallel_orchestrator.py` for consolidation
+- [x] Add clear docstrings to each module explaining its purpose
+- [x] Ensure `core.metrics` and `ui.metrics` have distinct purposes
+- [x] Review and clean up unused exports in `__init__.py`
+
+**Results:**
+
+#### 5.3.1 Orchestrator Review
+
+Both orchestrators are **distinct and both needed**:
+- `Orchestrator` (orchestrator.py): Sequential execution, simpler API, no mutex/resource management
+- `ParallelOrchestrator` (parallel_orchestrator.py): Parallel execution with DAG scheduling, mutex management, resource limits
+
+Added comprehensive docstrings to both modules explaining:
+- When to use each orchestrator
+- Key differences between them
+- Cross-references to related modules
+
+#### 5.3.2 Metrics Distinction
+
+The two metrics modules serve **different purposes**:
+- `core.metrics`: Production observability (alert thresholds, SLO tracking, system health)
+- `ui.metrics`: UI display (runtime stats in status bar, per-phase statistics)
+
+Added comprehensive docstrings to both modules explaining:
+- Purpose and scope of each module
+- Key differences between them
+- When to use each module
+
+#### 5.3.3 Package Docstring Enhancement
+
+Updated `core/__init__.py` with comprehensive module overview:
+- Description of all 17 modules
+- Orchestrator selection guidance
+- Metrics distinction explanation
+
+#### 5.3.4 Export Review
+
+All exports in `__init__.py` are actively used and properly organized. No cleanup needed.
 
 ### 5.4 Validation
 
-- [ ] All core tests pass: `cd core && just test`
-- [ ] No breaking changes to public API
+- [x] All core tests pass: `cd core && just test`
+- [x] No breaking changes to public API
 
 ---
 
@@ -587,3 +625,4 @@ stats
 | 1.1 | 2025-01-10 | AI Assistant | Milestone 1 completed - codebase already clean, no changes needed |
 | 1.2 | 2025-01-10 | AI Assistant | Milestone 2 completed - removed 7 debug scripts |
 | 1.3 | 2025-01-10 | AI Assistant | Milestone 4 completed - UI module architecture refactoring |
+| 1.4 | 2025-01-10 | AI Assistant | Milestone 5 completed - core module cleanup with enhanced docstrings |

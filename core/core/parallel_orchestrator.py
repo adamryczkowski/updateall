@@ -2,6 +2,36 @@
 
 This module provides a parallel orchestrator that runs plugins concurrently
 while respecting mutex constraints and resource limits.
+
+The ParallelOrchestrator is designed for high-performance execution where
+plugins can run in parallel, with sophisticated scheduling based on a
+directed acyclic graph (DAG) of dependencies and mutex constraints.
+
+Key features:
+    - Parallel execution in waves (plugins in the same wave run concurrently)
+    - DAG-based scheduling from plugin dependencies and mutex conflicts
+    - Mutex management to prevent resource conflicts
+    - Resource limits (max parallel tasks, memory, CPU)
+    - Automatic wave determination for optimal parallelism
+
+Key differences from Orchestrator:
+    - Parallel execution (multiple plugins run concurrently)
+    - Mutex management (prevents conflicts on shared resources)
+    - Resource limits (CPU, memory, bandwidth)
+    - DAG-based scheduling (respects dependencies)
+    - Higher overhead but better performance for many plugins
+
+Use this orchestrator when:
+    - Plugins have complex dependencies or mutex requirements
+    - Resource contention needs to be managed
+    - Performance is critical and parallelism is beneficial
+
+See Also:
+    orchestrator.Orchestrator: For simple sequential execution without
+        mutex management or resource limits.
+    scheduler.Scheduler: For building execution DAGs.
+    mutex.MutexManager: For mutex acquisition and release.
+    resource.ResourceController: For resource limit enforcement.
 """
 
 from __future__ import annotations

@@ -2,6 +2,26 @@
 
 This module provides the main orchestrator that runs plugins sequentially,
 collecting results and managing the execution lifecycle.
+
+The Orchestrator is designed for simple, sequential execution where plugins
+run one after another. For parallel execution with mutex management and
+resource limits, use ParallelOrchestrator from parallel_orchestrator.py.
+
+Key differences from ParallelOrchestrator:
+    - Sequential execution only (no parallelism)
+    - No mutex management (plugins don't share resources)
+    - No resource limits (CPU, memory, bandwidth)
+    - No DAG-based scheduling
+    - Simpler API and lower overhead
+
+Use this orchestrator when:
+    - Plugins don't have complex dependencies
+    - Resource contention is not a concern
+    - Simplicity is preferred over performance
+
+See Also:
+    parallel_orchestrator.ParallelOrchestrator: For parallel execution with
+        mutex management and resource limits.
 """
 
 from __future__ import annotations

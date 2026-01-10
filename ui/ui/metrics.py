@@ -10,6 +10,25 @@ runtime metrics during plugin execution:
 - MetricsSnapshot: Point-in-time snapshot of system metrics
 - RunningProgress: Running progress summary with predictions
 
+This module is for **UI display** - collecting and displaying real-time
+metrics in the terminal UI status bar during plugin execution.
+
+Key differences from core.metrics:
+    - Purpose: UI display vs. production monitoring
+    - Scope: Per-process runtime stats vs. system-wide health
+    - Data: CPU, memory, network, disk I/O vs. alert thresholds
+    - Usage: Status bar display vs. backend monitoring
+
+Use this module when:
+    - Displaying runtime metrics in the UI
+    - Tracking per-phase statistics (Update, Download, Upgrade)
+    - Persisting metrics across PTY session restarts
+    - Calculating ETAs and progress predictions
+
+See Also:
+    core.metrics: For production observability metrics with alert
+        thresholds (memory limits, latency targets, queue depth).
+
 Milestone 3 - Textual Library Usage Review and Fixes
 See docs/cleanup-and-refactoring-plan.md section 3.3.1
 

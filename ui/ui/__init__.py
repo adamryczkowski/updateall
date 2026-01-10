@@ -38,6 +38,12 @@ UI Revision Plan - Phase 3 Status Bar adds:
 - MetricsCollector: Process metrics collection using psutil
 - See docs/UI-revision-plan.md section 3.4
 
+Milestone 3 - Textual Library Usage Review and Fixes adds:
+- MetricsStore: Persistent storage for metrics across phase transitions
+- PhaseSnapshot: Immutable snapshot of phase metrics at completion
+- AccumulatedMetrics: Accumulated metrics across all phases
+- See docs/cleanup-and-refactoring-plan.md section 3.3.1
+
 UI Revision Plan - Phase 5 Integration and Polish adds:
 - End-to-end integration tests for phase control features
 - Performance optimization and benchmarks
@@ -63,6 +69,7 @@ from ui.interactive_tabbed_run import (
     run_with_interactive_tabbed_ui,
 )
 from ui.key_bindings import InvalidKeyError, KeyBindings, normalize_key
+from ui.metrics import AccumulatedMetrics, MetricsStore, PhaseSnapshot
 from ui.panels import SummaryPanel
 from ui.phase_status_bar import (
     PHASE_STATUS_BAR_CSS,
@@ -129,6 +136,7 @@ __all__ = [
     "TAB_STATUS_COLORS",
     "TAB_STATUS_CSS_CLASSES",
     "TAB_STATUS_ICONS",
+    "AccumulatedMetrics",
     "BatchedEvent",
     "BatchedEventHandler",
     "CallbackEventHandler",
@@ -139,6 +147,7 @@ __all__ = [
     "KeyBindings",
     "MetricsCollector",
     "MetricsSnapshot",
+    "MetricsStore",
     "PTYAlreadyStartedError",
     "PTYError",
     "PTYNotStartedError",
@@ -150,6 +159,7 @@ __all__ = [
     "PaneState",
     "PaneStateChanged",
     "PhaseMetrics",
+    "PhaseSnapshot",
     "PhaseStatusBar",
     "PluginProgressMessage",
     "PluginState",

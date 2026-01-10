@@ -6,10 +6,16 @@ for each terminal pane, including status, ETA, resource usage, and progress.
 UI Revision Plan - Phase 3 Status Bar
 See docs/UI-revision-plan.md section 3.4
 
+Milestone 3 - Textual Library Usage Review and Fixes
+See docs/cleanup-and-refactoring-plan.md section 3.3.1
+
 Enhanced to 5-line display with statistics table showing:
 - Phase rows: Update, Download, Upgrade, Total
 - Columns: Phase, Time, Data, CPU Time, Wall Time, Packages, Peak Memory
 - Running progress summary with predictions
+
+The MetricsCollector now uses a MetricsStore for persistent storage of
+phase metrics across PTY session restarts and phase transitions.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ from typing import TYPE_CHECKING, ClassVar
 
 from textual.reactive import reactive
 from textual.widgets import Static
+
+from ui.metrics import MetricsStore
 
 if TYPE_CHECKING:
     import asyncio
@@ -152,9 +160,15 @@ class MetricsCollector:
     metrics for a specific process. It handles errors gracefully when
     metrics are unavailable.
 
+    The MetricsCollector now integrates with a MetricsStore for persistent
+    storage of phase metrics across PTY session restarts and phase transitions.
+    This addresses the architectural issue where metrics were lost when
+    child processes exited or PTY sessions were restarted.
+
     Attributes:
         pid: Process ID to monitor, or None for system-wide metrics.
         update_interval: Interval between metric updates in seconds.
+        metrics_store: Optional MetricsStore for persistent metrics storage.
     """
 
     # Minimum interval between updates to avoid excessive CPU usage
@@ -164,15 +178,22 @@ class MetricsCollector:
         self,
         pid: int | None = None,
         update_interval: float = 1.0,
+        metrics_store: MetricsStore | None = None,
     ) -> None:
         """Initialize the metrics collector.
 
         Args:
             pid: Process ID to monitor, or None for current process.
             update_interval: Interval between metric updates in seconds.
+            metrics_store: Optional MetricsStore for persistent metrics.
+                If not provided, a new one will be created.
         """
         self.pid = pid
         self.update_interval = max(update_interval, self.MIN_UPDATE_INTERVAL)
+
+        # Use provided MetricsStore or create a new one
+        # The MetricsStore persists across PTY session restarts
+        self._metrics_store = metrics_store or MetricsStore()
 
         self._process: psutil.Process | None = None
         self._baseline: MetricsSnapshot | None = None
@@ -201,6 +222,9 @@ class MetricsCollector:
         # Track network bytes at phase start for per-phase data
         self._phase_start_network_bytes: int = 0
 
+        # Restore phase stats from MetricsStore if available
+        self._restore_from_store()
+
     @property
     def metrics(self) -> PhaseMetrics:
         """Get the current metrics."""
@@ -210,6 +234,35 @@ class MetricsCollector:
     def phase_stats(self) -> dict[str, PhaseStats]:
         """Get per-phase statistics."""
         return self._phase_stats
+
+    @property
+    def metrics_store(self) -> MetricsStore:
+        """Get the underlying MetricsStore for persistent storage."""
+        return self._metrics_store
+
+    def _restore_from_store(self) -> None:
+        """Restore phase stats from the MetricsStore.
+
+        This method is called during initialization to restore any
+        previously completed phase statistics from the MetricsStore.
+        This ensures that phase metrics persist across PTY session
+        restarts and phase transitions.
+        """
+        for phase_name, snapshot in self._metrics_store.get_all_snapshots().items():
+            if phase_name in self._phase_stats:
+                stats = self._phase_stats[phase_name]
+                stats.wall_time_seconds = snapshot.wall_time_seconds
+                stats.cpu_time_seconds = snapshot.cpu_time_seconds
+                stats.data_bytes = snapshot.data_bytes
+                stats.packages = snapshot.packages
+                stats.peak_memory_mb = snapshot.peak_memory_mb
+                stats.is_complete = True
+                stats.is_running = False
+
+        # Restore accumulated metrics
+        accumulated = self._metrics_store.get_accumulated_metrics()
+        self._max_cpu_time_seen = accumulated.total_cpu_time_seconds
+        self._peak_memory_mb = accumulated.peak_memory_mb
 
     def _get_process(self) -> psutil.Process | None:
         """Get or create the psutil Process object.
@@ -317,11 +370,19 @@ class MetricsCollector:
             self._phase_start_cpu_time = self._metrics.cpu_time_seconds
             self._phase_start_network_bytes = self._metrics.network_bytes
 
-    def complete_phase(self, phase_name: str) -> None:
-        """Mark a phase as complete.
+            # Notify the MetricsStore that a new phase is starting
+            self._metrics_store.start_phase(phase_name)
+
+    def complete_phase(self, phase_name: str, *, success: bool = True) -> None:
+        """Mark a phase as complete and snapshot metrics to the store.
+
+        This method marks the phase as complete and creates an immutable
+        snapshot in the MetricsStore. The snapshot is preserved even if
+        the PTY session is restarted or the MetricsCollector is reset.
 
         Args:
             phase_name: Name of the phase (Update, Download, Upgrade).
+            success: Whether the phase completed successfully.
         """
         if phase_name in self._phase_stats:
             stats = self._phase_stats[phase_name]
@@ -331,9 +392,10 @@ class MetricsCollector:
                 elapsed = (datetime.now(tz=UTC) - self._phase_start_time).total_seconds()
                 stats.wall_time_seconds = elapsed
 
-            # Calculate per-phase CPU time and data (delta from phase start)
-            # These are already set by update_phase_stats during collect()
-            # Just ensure they're preserved (don't reset)
+            # Snapshot the phase metrics to the MetricsStore
+            # This creates an immutable record that persists across
+            # PTY session restarts and phase transitions
+            self._metrics_store.snapshot_phase(phase_name, stats, success=success)
 
             self._current_phase = None
             self._phase_start_time = None

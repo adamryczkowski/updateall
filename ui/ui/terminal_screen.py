@@ -208,8 +208,11 @@ class TerminalScreen:
     def get_styled_line(self, line_number: int) -> list[StyledChar]:
         """Get a line with full styling information.
 
+        If scrolled up, returns styled characters from the scrolled view.
+        Otherwise, returns styled characters from the current screen buffer.
+
         Args:
-            line_number: Line number (0-indexed).
+            line_number: Line number (0-indexed) in the visible display.
 
         Returns:
             List of StyledChar objects for the line.
@@ -217,12 +220,117 @@ class TerminalScreen:
         if line_number < 0 or line_number >= self._lines:
             return []
 
+        # If scrolled up, we need to get the line from the scrolled view
+        if self._scroll_offset > 0:
+            return self._get_styled_line_scrolled(line_number)
+
+        # Not scrolled - get from current buffer
+        return self._get_styled_line_from_buffer(line_number)
+
+    def _get_styled_line_from_buffer(self, line_number: int) -> list[StyledChar]:
+        """Get styled line from the current screen buffer.
+
+        Args:
+            line_number: Line number (0-indexed).
+
+        Returns:
+            List of StyledChar objects for the line.
+        """
         buffer_line = self._screen.buffer[line_number]
         styled_chars: list[StyledChar] = []
 
         for col in range(self._columns):
             if col in buffer_line:
                 char = buffer_line[col]
+                styled_chars.append(
+                    StyledChar(
+                        data=char.data,
+                        fg=char.fg,
+                        bg=char.bg,
+                        bold=char.bold,
+                        italics=char.italics,
+                        underscore=char.underscore,
+                        strikethrough=char.strikethrough,
+                        reverse=char.reverse,
+                        blink=char.blink,
+                    )
+                )
+            else:
+                # Empty cell
+                styled_chars.append(
+                    StyledChar(
+                        data=" ",
+                        fg="default",
+                        bg="default",
+                    )
+                )
+
+        return styled_chars
+
+    def _get_styled_line_scrolled(self, line_number: int) -> list[StyledChar]:
+        """Get styled line from the scrolled view (history + current).
+
+        Args:
+            line_number: Line number (0-indexed) in the visible display.
+
+        Returns:
+            List of StyledChar objects for the line.
+        """
+        # Build the complete line list (history + current screen)
+        history_top = list(self._screen.history.top)
+        history_bottom = list(self._screen.history.bottom)
+
+        # Calculate which absolute line we need
+        total_history_top = len(history_top)
+        total_lines = total_history_top + self._lines + len(history_bottom)
+
+        if total_lines <= self._lines:
+            # Not enough content to scroll, return from buffer
+            return self._get_styled_line_from_buffer(line_number)
+
+        # Calculate the absolute line index based on scroll offset
+        # scroll_offset is how many lines we've scrolled up from the bottom
+        end_pos = total_lines - self._scroll_offset
+        start_pos = max(0, end_pos - self._lines)
+        absolute_line = start_pos + line_number
+
+        # Determine which source the line comes from
+        if absolute_line < total_history_top:
+            # Line is from top history
+            line_dict = history_top[absolute_line]
+            return self._styled_chars_from_line_dict(line_dict)
+        elif absolute_line < total_history_top + self._lines:
+            # Line is from current screen buffer
+            buffer_line_num = absolute_line - total_history_top
+            return self._get_styled_line_from_buffer(buffer_line_num)
+        else:
+            # Line is from bottom history
+            bottom_index = absolute_line - total_history_top - self._lines
+            if bottom_index < len(history_bottom):
+                line_dict = history_bottom[bottom_index]
+                return self._styled_chars_from_line_dict(line_dict)
+            else:
+                # Out of range, return empty line
+                return [
+                    StyledChar(data=" ", fg="default", bg="default") for _ in range(self._columns)
+                ]
+
+    def _styled_chars_from_line_dict(
+        self, line_dict: dict[int, pyte.screens.Char]
+    ) -> list[StyledChar]:
+        """Convert a pyte line dictionary to a list of StyledChar.
+
+        Args:
+            line_dict: Dictionary mapping column index to pyte Char.
+
+        Returns:
+            List of StyledChar objects for the line.
+        """
+        styled_chars: list[StyledChar] = []
+
+        for col in range(self._columns):
+            if col in line_dict:
+                char = line_dict[col]
                 styled_chars.append(
                     StyledChar(
                         data=char.data,

@@ -1,6 +1,6 @@
 [project]
 name = "update-all-ui"
-version = "0.14.4"
+version = "0.14.5"
 description = "Rich terminal UI components for update-all system"
 readme = "README.adoc"
 requires-python = ">=3.11"

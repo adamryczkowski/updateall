@@ -1470,22 +1470,27 @@ Application:
             # Let Textual handle navigation keys via its binding system
             return
 
-        # Let Textual handle scroll keys via its binding system
-        # These are bound to scroll actions in BINDINGS
-        scroll_keys = {
-            "up",
-            "down",
-            "pageup",
-            "pagedown",
-            "home",
-            "end",
-            "shift+pageup",
-            "shift+pagedown",
-            "shift+home",
-            "shift+end",
+        # Handle scroll keys directly by calling the appropriate action
+        # We can't rely on Textual's binding system because on_key handlers
+        # run after bindings are processed, and we need to prevent the
+        # default behavior for non-scroll keys.
+        scroll_key_actions = {
+            "up": self.action_scroll_line_up,
+            "down": self.action_scroll_line_down,
+            "pageup": self.action_scroll_up,
+            "pagedown": self.action_scroll_down,
+            "home": self.action_scroll_top,
+            "end": self.action_scroll_bottom,
+            "shift+pageup": self.action_scroll_up,
+            "shift+pagedown": self.action_scroll_down,
+            "shift+home": self.action_scroll_top,
+            "shift+end": self.action_scroll_bottom,
         }
-        if key in scroll_keys:
-            # Let Textual handle scroll keys via its binding system
+        if key in scroll_key_actions:
+            # Call the scroll action directly
+            scroll_key_actions[key]()
+            event.prevent_default()
+            event.stop()
             return
 
         # For printable characters, use event.character directly

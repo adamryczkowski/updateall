@@ -20,7 +20,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.containers import Container
-from textual.events import Resize  # noqa: TC002 - Required at runtime for event dispatch
+from textual.events import (  # noqa: TC002 - Required at runtime for event dispatch
+    MouseScrollDown,
+    MouseScrollUp,
+    Resize,
+)
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Static
@@ -429,7 +433,12 @@ class TerminalPane(Container):
             self.remove_class("focused")
 
     async def start(self) -> None:
-        """Start the PTY session and begin reading output."""
+        """Start the PTY session and begin reading output.
+
+        This method preserves the MetricsCollector across phase transitions
+        to maintain accumulated statistics. Only the PID is updated to track
+        the new process for the current phase.
+        """
         if self._state == PaneState.RUNNING:
             return
 
@@ -460,33 +469,57 @@ class TerminalPane(Container):
         self._read_task = asyncio.create_task(self._read_loop())
 
         # Phase 3: Start metrics collection if phase status bar is enabled
+        # IMPORTANT: Preserve existing MetricsCollector across phases to maintain
+        # accumulated statistics. Only create a new one if none exists.
         if self.config.show_phase_status_bar and self._phase_status_bar:
             session = manager.get_session(self.pane_id)
             pid = session.pid if session else None
-            self._metrics_collector = MetricsCollector(
-                pid=pid,
-                update_interval=self.config.metrics_update_interval,
-            )
-            self._metrics_collector.start()
+
+            if self._metrics_collector is None:
+                # First phase: create new MetricsCollector
+                self._metrics_collector = MetricsCollector(
+                    pid=pid,
+                    update_interval=self.config.metrics_update_interval,
+                )
+                self._metrics_collector.start()
+                self._phase_status_bar.set_metrics_collector(self._metrics_collector)
+            else:
+                # Subsequent phases: update PID to track new process
+                # This preserves accumulated _phase_stats across phases
+                self._metrics_collector.update_pid(pid)
+                # Ensure collector is running (may have been stopped between phases)
+                if not self._metrics_collector._running:
+                    self._metrics_collector.start()
+
             self._metrics_collector.update_status("In Progress")
-            self._phase_status_bar.set_metrics_collector(self._metrics_collector)
             self._metrics_update_task = asyncio.create_task(self._metrics_update_loop())
 
         # Post state change message
         self.post_message(PaneStateChanged(self.pane_id, self._state))
 
     async def stop(self) -> None:
-        """Stop the PTY session."""
-        # Phase 3: Stop metrics collection
+        """Stop the PTY session.
+
+        Note: This method stops the metrics update task but preserves the
+        MetricsCollector instance. This is intentional - the MetricsCollector
+        holds accumulated phase statistics that must be preserved across
+        phase transitions. The collector will be reused when start() is
+        called for the next phase.
+        """
+        # Phase 3: Stop metrics update task (but preserve the collector!)
         if self._metrics_update_task is not None:
             self._metrics_update_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._metrics_update_task
             self._metrics_update_task = None
 
+        # Stop the metrics collector but DON'T set it to None
+        # The collector holds accumulated _phase_stats that must be preserved
+        # across phase transitions. Setting it to None would cause a new
+        # collector to be created in start(), losing all phase statistics.
         if self._metrics_collector is not None:
             self._metrics_collector.stop()
-            self._metrics_collector = None
+            # Note: We intentionally do NOT set self._metrics_collector = None here
 
         if self._read_task is not None:
             self._read_task.cancel()
@@ -532,16 +565,9 @@ class TerminalPane(Container):
 
     async def _read_loop(self) -> None:
         """Background task to read from PTY and update terminal view."""
-        import logging
-
-        logger = logging.getLogger("terminal_pane")
-
-        logger.debug(f"[{self.pane_id}] _read_loop started")
         manager = await self.get_session_manager()
-        logger.debug(f"[{self.pane_id}] Got session manager: {manager}")
 
         try:
-            read_count = 0
             # Continue reading while:
             # 1. Our state is RUNNING (we haven't been stopped externally)
             # 2. The PTY session exists and is running, OR there might be buffered data
@@ -554,39 +580,22 @@ class TerminalPane(Container):
                         timeout=0.1,
                     )
                     if data:
-                        read_count += 1
-                        logger.debug(
-                            f"[{self.pane_id}] Read #{read_count}: {len(data)} bytes: {data[:50]!r}..."
-                        )
                         if self._terminal_view:
-                            logger.debug(f"[{self.pane_id}] Feeding to terminal_view")
                             self._terminal_view.feed(data)
-                            logger.debug(
-                                f"[{self.pane_id}] Fed to terminal_view, display[0]={self._terminal_view.terminal_display[0][:40]!r}"
-                            )
-                        else:
-                            logger.warning(f"[{self.pane_id}] terminal_view is None!")
                         self.post_message(PaneOutputMessage(self.pane_id, data))
                     else:
                         # No data received - check if session is still running
                         session = manager.get_session(self.pane_id)
                         if session is None or not session.is_running:
-                            logger.debug(f"[{self.pane_id}] Session ended, breaking read loop")
                             break
                 except PTYReadTimeoutError:
                     # Timeout is normal - check if session is still running
                     session = manager.get_session(self.pane_id)
                     if session is None or not session.is_running:
-                        logger.debug(
-                            f"[{self.pane_id}] Session ended during timeout, breaking read loop"
-                        )
                         break
                     continue
-                except Exception as e:
-                    logger.exception(f"[{self.pane_id}] Read error: {e}")
+                except Exception:
                     break
-
-            logger.debug(f"[{self.pane_id}] _read_loop exited, total reads: {read_count}")
 
             # Check exit status
             session = manager.get_session(self.pane_id)
@@ -770,3 +779,35 @@ class TerminalPane(Container):
         """Scroll to the bottom (current output)."""
         if self._terminal_view:
             self._terminal_view.scroll_to_bottom()
+
+    # Mouse scroll event handlers
+    # These handlers capture mouse scroll events that bubble up from child widgets
+    # and forward them to the TerminalView for scrolling the terminal history.
+    # This is necessary because TerminalView extends Static (not a scrollable
+    # container), so it doesn't automatically receive scroll events.
+
+    def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        """Handle mouse scroll up event.
+
+        Scrolls the terminal history up when the mouse wheel scrolls up
+        while the cursor is over the terminal pane.
+
+        Args:
+            event: The mouse scroll up event.
+        """
+        if self._terminal_view:
+            self._terminal_view.scroll_history_up(lines=3)
+            event.stop()
+
+    def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
+        """Handle mouse scroll down event.
+
+        Scrolls the terminal history down when the mouse wheel scrolls down
+        while the cursor is over the terminal pane.
+
+        Args:
+            event: The mouse scroll down event.
+        """
+        if self._terminal_view:
+            self._terminal_view.scroll_history_down(lines=3)
+            event.stop()

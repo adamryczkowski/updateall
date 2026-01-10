@@ -182,6 +182,11 @@ class MetricsCollector:
         self._running = False
         self._update_task: asyncio.Task[None] | None = None
 
+        # Track maximum CPU time seen to handle child process exits
+        # When child processes exit, their CPU time is lost from the process tree.
+        # By tracking the maximum, we ensure CPU time never decreases.
+        self._max_cpu_time_seen: float = 0.0
+
         # Per-phase statistics
         self._phase_stats: dict[str, PhaseStats] = {
             "Update": PhaseStats("Update"),
@@ -267,6 +272,30 @@ class MetricsCollector:
         if self._update_task:
             self._update_task.cancel()
             self._update_task = None
+
+    def update_pid(self, pid: int | None) -> None:
+        """Update the process ID to monitor.
+
+        This method allows updating the PID when transitioning between phases.
+        Each phase may spawn a new process, but we want to preserve accumulated
+        statistics across phases. This method updates the PID while keeping
+        all existing phase statistics intact.
+
+        Args:
+            pid: New process ID to monitor, or None for current process.
+        """
+        self.pid = pid
+        # Reset the process object so it will be recreated with the new PID
+        self._process = None
+        # Take a new baseline for network/disk I/O deltas
+        # Note: We don't reset _max_cpu_time_seen because we want to preserve
+        # the total CPU time accumulated across all phases
+        self._baseline = self._take_baseline_snapshot()
+        # Prime the CPU percent counter for the new process
+        process = self._get_process()
+        if process:
+            with contextlib.suppress(Exception):
+                process.cpu_percent()  # First call returns 0, primes the counter
 
     def start_phase(self, phase_name: str) -> None:
         """Start tracking a new phase.
@@ -388,8 +417,67 @@ class MetricsCollector:
             peak_memory_so_far=total.peak_memory_mb,
         )
 
+    def _collect_process_tree_metrics(
+        self,
+        process: psutil.Process,
+    ) -> tuple[float, float, float]:
+        """Collect aggregated metrics from a process and all its descendants.
+
+        This method recursively collects CPU percent, memory, and CPU time
+        from the given process and all its children (grandchildren, etc.).
+        This is essential for accurately measuring resource usage when the
+        monitored PID is a shell that spawns child processes to do the work.
+
+        Args:
+            process: The root psutil.Process to collect metrics from.
+
+        Returns:
+            Tuple of (cpu_percent, memory_mb, cpu_time_seconds) aggregated
+            from the process and all its descendants.
+        """
+        import psutil
+
+        total_cpu_percent = 0.0
+        total_memory_mb = 0.0
+        total_cpu_time = 0.0
+
+        # Collect from the main process
+        try:
+            total_cpu_percent += process.cpu_percent()
+            mem_info = process.memory_info()
+            total_memory_mb += mem_info.rss / (1024 * 1024)
+            cpu_times = process.cpu_times()
+            total_cpu_time += cpu_times.user + cpu_times.system
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+        # Collect from all child processes recursively
+        try:
+            children = process.children(recursive=True)
+            for child in children:
+                try:
+                    total_cpu_percent += child.cpu_percent()
+                    child_mem = child.memory_info()
+                    total_memory_mb += child_mem.rss / (1024 * 1024)
+                    child_cpu_times = child.cpu_times()
+                    total_cpu_time += child_cpu_times.user + child_cpu_times.system
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    # Child process may have exited, skip it
+                    continue
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            # Parent process may have exited
+            pass
+
+        return total_cpu_percent, total_memory_mb, total_cpu_time
+
     def collect(self) -> PhaseMetrics:
         """Collect current metrics.
+
+        This method collects metrics from the monitored process and ALL its
+        descendant processes (children, grandchildren, etc.). This is important
+        because the monitored PID is typically a shell process that spawns
+        child processes to do the actual work. Many upgrade scripts are just
+        wrappers that spawn other processes.
 
         Returns:
             Updated PhaseMetrics with current values.
@@ -403,51 +491,41 @@ class MetricsCollector:
             # Try to get process-specific metrics first
             process = self._get_process()
 
-            # CPU percent (since last call) - try process first, fall back to system
-            try:
-                if process:
-                    self._metrics.cpu_percent = process.cpu_percent()
-                else:
+            # Collect metrics from process tree (parent + all descendants)
+            if process:
+                try:
+                    cpu_percent, memory_mb, cpu_time = self._collect_process_tree_metrics(process)
+                    self._metrics.cpu_percent = cpu_percent
+                    self._metrics.memory_mb = memory_mb
+                    # Use maximum of current and previously seen CPU time.
+                    # When child processes exit, their CPU time is lost from the
+                    # process tree. By tracking the maximum, we ensure CPU time
+                    # never decreases, which fixes the issue where CPU counters
+                    # would reset to zero after each action (like "Checking repository...").
+                    self._max_cpu_time_seen = max(self._max_cpu_time_seen, cpu_time)
+                    self._metrics.cpu_time_seconds = self._max_cpu_time_seen
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    # Fall back to system-wide metrics
                     self._metrics.cpu_percent = psutil.cpu_percent()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                self._metrics.cpu_percent = psutil.cpu_percent()
-
-            # Memory usage - try process first, fall back to system
-            try:
-                if process:
-                    mem_info = process.memory_info()
-                    self._metrics.memory_mb = mem_info.rss / (1024 * 1024)
-                else:
                     mem = psutil.virtual_memory()
                     self._metrics.memory_mb = mem.used / (1024 * 1024)
-                self._peak_memory_mb = max(self._peak_memory_mb, self._metrics.memory_mb)
-                self._metrics.memory_peak_mb = self._peak_memory_mb
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                mem = psutil.virtual_memory()
-                self._metrics.memory_mb = mem.used / (1024 * 1024)
-                self._peak_memory_mb = max(self._peak_memory_mb, self._metrics.memory_mb)
-                self._metrics.memory_peak_mb = self._peak_memory_mb
-
-            # CPU time - try process first, fall back to system-wide
-            try:
-                if process:
-                    cpu_times = process.cpu_times()
-                    self._metrics.cpu_time_seconds = cpu_times.user + cpu_times.system
-                else:
-                    # Use system-wide CPU times as fallback
-                    cpu_times = psutil.cpu_times()
-                    # Calculate elapsed CPU time since baseline
                     if self._baseline:
                         elapsed = (datetime.now(tz=UTC) - self._baseline.timestamp).total_seconds()
-                        # Estimate CPU time based on CPU percent and elapsed time
                         self._metrics.cpu_time_seconds = elapsed * (
                             self._metrics.cpu_percent / 100.0
                         )
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                # Use elapsed time * CPU percent as estimate
+            else:
+                # No process to monitor, use system-wide metrics
+                self._metrics.cpu_percent = psutil.cpu_percent()
+                mem = psutil.virtual_memory()
+                self._metrics.memory_mb = mem.used / (1024 * 1024)
                 if self._baseline:
                     elapsed = (datetime.now(tz=UTC) - self._baseline.timestamp).total_seconds()
                     self._metrics.cpu_time_seconds = elapsed * (self._metrics.cpu_percent / 100.0)
+
+            # Update peak memory
+            self._peak_memory_mb = max(self._peak_memory_mb, self._metrics.memory_mb)
+            self._metrics.memory_peak_mb = self._peak_memory_mb
 
             # Network and disk I/O (system-wide, calculate delta from baseline)
             if self._baseline:

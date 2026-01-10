@@ -93,6 +93,11 @@ class TerminalView(Static):
     - Cursor display
     - Scrollback buffer navigation
     - Resize handling
+    - Mouse wheel scrolling support
+
+    The widget is focusable (can_focus=True) to ensure it receives mouse
+    events for scrolling. This is necessary because Static widgets don't
+    receive mouse events by default in Textual.
 
     Example:
         view = TerminalView(columns=80, lines=24)
@@ -103,12 +108,20 @@ class TerminalView(Static):
     # Reactive properties
     show_cursor: reactive[bool] = reactive(True)
 
+    # Enable focus to receive mouse events
+    # This is a class variable that Textual checks
+    can_focus = True
+
     # CSS styling
     DEFAULT_CSS = """
     TerminalView {
         background: $surface;
         color: $text;
         min-height: 10;
+    }
+
+    TerminalView:focus {
+        border: solid $accent;
     }
     """
 
@@ -186,18 +199,12 @@ class TerminalView(Static):
         Args:
             data: Bytes to feed (may contain ANSI escape sequences).
         """
-        import logging
-
-        logger = logging.getLogger("terminal_view")
-
         self._terminal_screen.feed(data)
-        logger.debug(f"[{self.id}] feed() called with {len(data)} bytes, updating content")
 
         # Update the Static widget's content with the rendered terminal lines
         lines = self.render_terminal_lines()
         content = Group(*lines)
         self.update(content)
-        logger.debug(f"[{self.id}] update() called, size={self.size}, region={self.region}")
 
     def resize_terminal(self, columns: int, lines: int) -> None:
         """Resize the terminal screen.
@@ -221,7 +228,7 @@ class TerminalView(Static):
             lines: Number of lines to scroll.
         """
         self._terminal_screen.scroll_up(lines)
-        self.refresh()
+        self._update_display()
 
     def scroll_history_down(self, lines: int = 1) -> None:
         """Scroll down in the history buffer.
@@ -230,17 +237,30 @@ class TerminalView(Static):
             lines: Number of lines to scroll.
         """
         self._terminal_screen.scroll_down(lines)
-        self.refresh()
+        self._update_display()
 
     def scroll_to_bottom(self) -> None:
         """Scroll to the bottom (current output)."""
         self._terminal_screen.scroll_to_bottom()
-        self.refresh()
+        self._update_display()
 
     def scroll_to_top(self) -> None:
         """Scroll to the top of history."""
         self._terminal_screen.scroll_to_top()
-        self.refresh()
+        self._update_display()
+
+    def _update_display(self) -> None:
+        """Update the widget's display content.
+
+        This re-renders the terminal lines and calls update() to set the
+        new content. This is necessary after scrolling because refresh()
+        only repaints the cached content, it doesn't re-render.
+        """
+        from rich.console import Group
+
+        rendered_lines = self.render_terminal_lines()
+        content = Group(*rendered_lines)
+        self.update(content)
 
     def get_dirty_lines(self) -> set[int]:
         """Get the set of dirty line numbers."""

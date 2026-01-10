@@ -4,8 +4,28 @@ This module provides a PhaseController that manages the execution of plugins
 through their phases (CHECK, DOWNLOAD, EXECUTE) with optional pause points
 between phases.
 
+Module Responsibilities (Milestone 4 - Architecture Refactoring):
+-----------------------------------------------------------------
+This module is responsible for PHASE EXECUTION LOGIC:
+- Managing the state machine for phase transitions (PENDING -> RUNNING -> COMPLETED)
+- Tracking which phase each plugin is currently in
+- Providing phase-specific commands for each plugin
+- Handling pause points between phases
+- Coordinating phase execution across multiple plugins
+
+This module does NOT handle:
+- Metrics collection (see ui/ui/metrics.py)
+- Visual display of phase status (see ui/ui/phase_status_bar.py)
+- Tab status icons and labels (see ui/ui/phase_tab.py)
+
+The PhaseController works with the InteractiveTabbedApp to execute plugins
+phase by phase, allowing for pause points and retry functionality.
+
 UI Revision Plan - Phase 1 Core Infrastructure
 See docs/UI-revision-plan.md section 3.2
+
+Milestone 4 - UI Module Architecture Refactoring
+See docs/cleanup-and-refactoring-plan.md section 4.3.3
 """
 
 from __future__ import annotations

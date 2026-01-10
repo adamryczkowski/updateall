@@ -12,12 +12,19 @@ See docs/UI-revision-plan.md section 3.5 and 4 Phase 4
 
 Phase 1 - Core Infrastructure (PhaseController)
 See docs/UI-revision-plan.md section 4 Phase 1
+
+Milestone 4 - UI Module Architecture Refactoring
+See docs/cleanup-and-refactoring-plan.md section 4.3.1
+
+The following classes have been extracted to separate modules:
+- InteractiveTabData -> ui/ui/models.py
+- AllPluginsCompleted -> ui/ui/messages.py
+- ProgressBar -> ui/ui/progress.py
 """
 
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -26,13 +33,14 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.events import Key  # noqa: TC002 - Required at runtime for event dispatch
-from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from core.streaming import Phase
 from ui.input_router import InputRouter
 from ui.key_bindings import KeyBindings
+from ui.messages import AllPluginsCompleted
+from ui.models import InteractiveTabData
 from ui.phase_controller import PhaseController  # PhaseResult, PhaseState not used directly
 from ui.phase_tab import (
     PHASE_TAB_CSS,
@@ -42,6 +50,7 @@ from ui.phase_tab import (
     get_tab_css_class,
     get_tab_label,
 )
+from ui.progress import ProgressBar
 from ui.pty_session import is_pty_available
 from ui.sudo import SudoKeepAlive, SudoStatus, check_sudo_status
 from ui.terminal_pane import (
@@ -57,121 +66,6 @@ if TYPE_CHECKING:
 
     from core.interfaces import UpdatePlugin
     from core.models import PluginConfig
-
-
-@dataclass
-class InteractiveTabData:
-    """Data for an interactive tab."""
-
-    plugin_name: str
-    plugin: UpdatePlugin
-    command: list[str]
-    state: PaneState = PaneState.IDLE
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    exit_code: int | None = None
-    error_message: str | None = None
-    output_bytes: int = 0
-    config: PaneConfig = field(default_factory=PaneConfig)
-    # Phase 2: Visual enhancement fields
-    current_phase: DisplayPhase = DisplayPhase.PENDING
-    tab_status: TabStatus = TabStatus.PENDING
-
-
-class AllPluginsCompleted(Message):
-    """Message sent when all plugins have completed."""
-
-    def __init__(
-        self,
-        total: int,
-        successful: int,
-        failed: int,
-    ) -> None:
-        """Initialize the message.
-
-        Args:
-            total: Total number of plugins.
-            successful: Number of successful plugins.
-            failed: Number of failed plugins.
-        """
-        self.total = total
-        self.successful = successful
-        self.failed = failed
-        super().__init__()
-
-
-class ProgressBar(Static):
-    """Progress bar showing overall completion status."""
-
-    DEFAULT_CSS = """
-    ProgressBar {
-        height: 3;
-        dock: bottom;
-        padding: 0 1;
-        background: $surface;
-        border-top: solid $primary;
-    }
-    """
-
-    def __init__(
-        self,
-        total_plugins: int,
-        *,
-        name: str | None = None,
-        id: str | None = None,
-        classes: str | None = None,
-    ) -> None:
-        """Initialize the progress bar.
-
-        Args:
-            total_plugins: Total number of plugins.
-            name: Widget name.
-            id: Widget ID.
-            classes: CSS classes.
-        """
-        super().__init__(name=name, id=id, classes=classes)
-        self.total_plugins = total_plugins
-        self.completed = 0
-        self.successful = 0
-        self.failed = 0
-
-    def update_progress(
-        self,
-        completed: int,
-        successful: int,
-        failed: int,
-    ) -> None:
-        """Update the progress display.
-
-        Args:
-            completed: Number of completed plugins.
-            successful: Number of successful plugins.
-            failed: Number of failed plugins.
-        """
-        self.completed = completed
-        self.successful = successful
-        self.failed = failed
-        self._refresh_display()
-
-    def _refresh_display(self) -> None:
-        """Refresh the progress display."""
-        pending = self.total_plugins - self.completed
-        percent = (self.completed / self.total_plugins * 100) if self.total_plugins > 0 else 0
-
-        # Build progress bar
-        bar_width = 30
-        filled = int(bar_width * percent / 100)
-        empty = bar_width - filled
-        bar = f"[{'█' * filled}{'░' * empty}]"
-
-        text = (
-            f"Progress: {bar} {percent:.0f}% "
-            f"({self.completed}/{self.total_plugins}) "
-            f"[green]✓ {self.successful}[/green] "
-            f"[red]✗ {self.failed}[/red] "
-            f"[dim]⏳ {pending}[/dim]"
-        )
-        self.update(text)
 
 
 def _get_ui_version() -> str:

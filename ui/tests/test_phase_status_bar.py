@@ -6,13 +6,15 @@ See docs/UI-revision-plan.md section 5.3
 
 from __future__ import annotations
 
-from ui.phase_status_bar import (
-    PHASE_STATUS_BAR_CSS,
+from ui.metrics import (
     MetricsCollector,
     MetricsSnapshot,
     PhaseMetrics,
-    PhaseStatusBar,
     create_metrics_collector_for_pid,
+)
+from ui.phase_status_bar import (
+    PHASE_STATUS_BAR_CSS,
+    PhaseStatusBar,
 )
 
 

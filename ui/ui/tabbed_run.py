@@ -1,14 +1,33 @@
-"""Tabbed run display for interactive plugin execution with streaming support.
+"""Tabbed run display for plugin execution with streaming support (non-interactive).
 
 This module provides a Textual-based TUI for running updates with:
 - Tabs for each plugin showing live streaming output
 - Keyboard navigation between tabs (left/right arrows)
-- Interactive input support (e.g., sudo password prompts)
 - Progress bar at the bottom showing overall status
 - Real-time progress updates during download and execution phases
 
+When to Use This Module vs interactive_tabbed_run.py:
+-----------------------------------------------------
+Use TabbedRunApp (this module) when:
+- PTY is not available on the system
+- You don't need interactive input (sudo prompts, confirmations)
+- You want simpler, non-interactive output display
+- You're running in an environment without full terminal support
+
+Use InteractiveTabbedApp (interactive_tabbed_run.py) when:
+- You need full PTY terminal emulation
+- You need interactive input support (sudo prompts, confirmations)
+- You want scrollback buffer and ANSI escape sequence support
+- You need phase-based execution with pause points
+
+The run_with_interactive_tabbed_ui() function automatically falls back
+to TabbedRunApp if PTY is not available on the system.
+
 Phase 3 - UI Integration
 See docs/update-all-architecture-refinement-plan.md
+
+Milestone 4 - UI Module Architecture Refactoring
+See docs/cleanup-and-refactoring-plan.md section 4.3.4
 """
 
 from __future__ import annotations

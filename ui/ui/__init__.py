@@ -44,6 +44,13 @@ Milestone 3 - Textual Library Usage Review and Fixes adds:
 - AccumulatedMetrics: Accumulated metrics across all phases
 - See docs/cleanup-and-refactoring-plan.md section 3.3.1
 
+Milestone 4 - UI Module Architecture Refactoring adds:
+- Extracted InteractiveTabData to ui/ui/models.py
+- Extracted AllPluginsCompleted to ui/ui/messages.py
+- Extracted ProgressBar to ui/ui/progress.py
+- Moved MetricsCollector, PhaseMetrics, etc. to ui/ui/metrics.py
+- See docs/cleanup-and-refactoring-plan.md section 4
+
 UI Revision Plan - Phase 5 Integration and Polish adds:
 - End-to-end integration tests for phase control features
 - Performance optimization and benchmarks
@@ -69,15 +76,23 @@ from ui.interactive_tabbed_run import (
     run_with_interactive_tabbed_ui,
 )
 from ui.key_bindings import InvalidKeyError, KeyBindings, normalize_key
-from ui.metrics import AccumulatedMetrics, MetricsStore, PhaseSnapshot
+from ui.messages import AllPluginsCompleted
+from ui.metrics import (
+    AccumulatedMetrics,
+    MetricsCollector,
+    MetricsSnapshot,
+    MetricsStore,
+    PhaseMetrics,
+    PhaseSnapshot,
+    PhaseStats,
+    RunningProgress,
+    create_metrics_collector_for_pid,
+)
+from ui.models import InteractiveTabData
 from ui.panels import SummaryPanel
 from ui.phase_status_bar import (
     PHASE_STATUS_BAR_CSS,
-    MetricsCollector,
-    MetricsSnapshot,
-    PhaseMetrics,
     PhaseStatusBar,
-    create_metrics_collector_for_pid,
 )
 from ui.phase_tab import (
     PHASE_TAB_CSS,
@@ -92,7 +107,7 @@ from ui.phase_tab import (
     get_tab_css_class,
     get_tab_label,
 )
-from ui.progress import ProgressDisplay
+from ui.progress import ProgressBar, ProgressDisplay
 from ui.pty_manager import PTYSessionManager, SessionNotFoundError
 from ui.pty_session import (
     PTYAlreadyStartedError,
@@ -137,11 +152,13 @@ __all__ = [
     "TAB_STATUS_CSS_CLASSES",
     "TAB_STATUS_ICONS",
     "AccumulatedMetrics",
+    "AllPluginsCompleted",
     "BatchedEvent",
     "BatchedEventHandler",
     "CallbackEventHandler",
     "DisplayPhase",
     "InputRouter",
+    "InteractiveTabData",
     "InteractiveTabbedApp",
     "InvalidKeyError",
     "KeyBindings",
@@ -160,12 +177,15 @@ __all__ = [
     "PaneStateChanged",
     "PhaseMetrics",
     "PhaseSnapshot",
+    "PhaseStats",
     "PhaseStatusBar",
     "PluginProgressMessage",
     "PluginState",
+    "ProgressBar",
     "ProgressDisplay",
     "ResultsTable",
     "RouteTarget",
+    "RunningProgress",
     "SessionNotFoundError",
     "StatisticsViewerApp",
     "StreamEventAdapter",

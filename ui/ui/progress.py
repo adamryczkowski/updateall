@@ -1,4 +1,12 @@
-"""Progress display component using Rich."""
+"""Progress display components for the UI module.
+
+This module provides progress display components:
+- ProgressDisplay: Rich-based progress display for non-interactive mode
+- ProgressBar: Textual widget for interactive tabbed mode
+
+Milestone 4 - UI Module Architecture Refactoring
+See docs/cleanup-and-refactoring-plan.md section 4.3.1
+"""
 
 from __future__ import annotations
 
@@ -15,6 +23,7 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
+from textual.widgets import Static
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -197,3 +206,91 @@ async def progress_display(
     display = ProgressDisplay(console)
     async with display:
         yield display
+
+
+class ProgressBar(Static):
+    """Progress bar showing overall completion status.
+
+    This Textual widget displays a progress bar at the bottom of the
+    InteractiveTabbedApp, showing the overall completion status of
+    all plugins.
+
+    Milestone 4 - UI Module Architecture Refactoring
+    See docs/cleanup-and-refactoring-plan.md section 4.3.1
+
+    Attributes:
+        total_plugins: Total number of plugins to track.
+        completed: Number of completed plugins.
+        successful: Number of successful plugins.
+        failed: Number of failed plugins.
+    """
+
+    DEFAULT_CSS = """
+    ProgressBar {
+        height: 3;
+        dock: bottom;
+        padding: 0 1;
+        background: $surface;
+        border-top: solid $primary;
+    }
+    """
+
+    def __init__(
+        self,
+        total_plugins: int,
+        *,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        """Initialize the progress bar.
+
+        Args:
+            total_plugins: Total number of plugins.
+            name: Widget name.
+            id: Widget ID.
+            classes: CSS classes.
+        """
+        super().__init__(name=name, id=id, classes=classes)
+        self.total_plugins = total_plugins
+        self.completed = 0
+        self.successful = 0
+        self.failed = 0
+
+    def update_progress(
+        self,
+        completed: int,
+        successful: int,
+        failed: int,
+    ) -> None:
+        """Update the progress display.
+
+        Args:
+            completed: Number of completed plugins.
+            successful: Number of successful plugins.
+            failed: Number of failed plugins.
+        """
+        self.completed = completed
+        self.successful = successful
+        self.failed = failed
+        self._refresh_display()
+
+    def _refresh_display(self) -> None:
+        """Refresh the progress display."""
+        pending = self.total_plugins - self.completed
+        percent = (self.completed / self.total_plugins * 100) if self.total_plugins > 0 else 0
+
+        # Build progress bar
+        bar_width = 30
+        filled = int(bar_width * percent / 100)
+        empty = bar_width - filled
+        bar = f"[{'█' * filled}{'░' * empty}]"
+
+        text = (
+            f"Progress: {bar} {percent:.0f}% "
+            f"({self.completed}/{self.total_plugins}) "
+            f"[green]✓ {self.successful}[/green] "
+            f"[red]✗ {self.failed}[/red] "
+            f"[dim]⏳ {pending}[/dim]"
+        )
+        self.update(text)

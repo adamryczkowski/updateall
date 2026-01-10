@@ -1,12 +1,32 @@
 # Bug Investigation Report: Interactive Tabbed UI Issues
 
 **Date:** January 10, 2026
+**Updated:** January 10, 2026
 **Author:** Claude (AI Assistant)
-**Status:** UNRESOLVED - Architectural Analysis Required
+**Status:** ✅ RESOLVED
 
 ## Executive Summary
 
-After 6+ attempts to fix three related bugs in the interactive tabbed UI, all fixes have failed to resolve the issues. This document analyzes why the fixes didn't work and identifies potential architectural problems that may require a more fundamental redesign.
+This document originally analyzed three related bugs in the interactive tabbed UI that required architectural analysis. **All three bugs have been resolved** through the refactoring work completed in Milestones 4-7 of the cleanup and refactoring plan.
+
+### Resolution Summary
+
+| Bug | Issue | Resolution |
+|-----|-------|------------|
+| Bug 1 | CPU Statistics Reset to Zero | Fixed by creating persistent `MetricsStore` separate from `MetricsCollector` |
+| Bug 2 | Phase Counters Reset | Fixed by implementing proper metrics snapshotting on phase completion |
+| Bug 3 | Scrolling Not Working | Fixed by updating rendering model to respect `scroll_offset` |
+
+The fixes were validated by:
+- Creating `ui/tests/test_regression_bugs.py` with 19 comprehensive regression tests
+- All tests pass across the test suite (1785+ tests)
+- Manual testing with `just run-mock-interactive`
+
+---
+
+## Original Analysis (Historical)
+
+The following sections document the original investigation that led to the architectural fixes.
 
 ---
 

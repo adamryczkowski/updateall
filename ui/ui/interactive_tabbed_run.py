@@ -1452,6 +1452,7 @@ Application:
 
         This method intercepts all key events and routes them appropriately:
         - Navigation keys (Ctrl+Tab, etc.) are handled by Textual's binding system
+        - Scroll keys (arrows, page up/down, home/end) are handled by Textual bindings
         - All other keys are sent to the active PTY session
 
         Args:
@@ -1467,6 +1468,24 @@ Application:
         # Check if this is a navigation key that should be handled by the app
         if self._input_router.get_route_target(key).name == "APP":
             # Let Textual handle navigation keys via its binding system
+            return
+
+        # Let Textual handle scroll keys via its binding system
+        # These are bound to scroll actions in BINDINGS
+        scroll_keys = {
+            "up",
+            "down",
+            "pageup",
+            "pagedown",
+            "home",
+            "end",
+            "shift+pageup",
+            "shift+pagedown",
+            "shift+home",
+            "shift+end",
+        }
+        if key in scroll_keys:
+            # Let Textual handle scroll keys via its binding system
             return
 
         # For printable characters, use event.character directly

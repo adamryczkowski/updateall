@@ -191,6 +191,11 @@ class MetricsCollector:
         self._current_phase: str | None = None
         self._phase_start_time: datetime | None = None
 
+        # Track CPU time at phase start to calculate per-phase CPU time
+        self._phase_start_cpu_time: float = 0.0
+        # Track network bytes at phase start for per-phase data
+        self._phase_start_network_bytes: int = 0
+
     @property
     def metrics(self) -> PhaseMetrics:
         """Get the current metrics."""
@@ -275,6 +280,10 @@ class MetricsCollector:
             self._phase_stats[phase_name].is_running = True
             self._phase_stats[phase_name].is_complete = False
 
+            # Record starting CPU time and network bytes for per-phase calculation
+            self._phase_start_cpu_time = self._metrics.cpu_time_seconds
+            self._phase_start_network_bytes = self._metrics.network_bytes
+
     def complete_phase(self, phase_name: str) -> None:
         """Mark a phase as complete.
 
@@ -288,6 +297,11 @@ class MetricsCollector:
             if self._phase_start_time:
                 elapsed = (datetime.now(tz=UTC) - self._phase_start_time).total_seconds()
                 stats.wall_time_seconds = elapsed
+
+            # Calculate per-phase CPU time and data (delta from phase start)
+            # These are already set by update_phase_stats during collect()
+            # Just ensure they're preserved (don't reset)
+
             self._current_phase = None
             self._phase_start_time = None
 
@@ -419,13 +433,23 @@ class MetricsCollector:
                 except Exception:
                     pass
 
-            # Update current phase stats
+            # Update current phase stats with per-phase deltas
             if self._current_phase:
+                # Calculate per-phase CPU time (delta from phase start)
+                phase_cpu_time = max(
+                    0.0,
+                    self._metrics.cpu_time_seconds - self._phase_start_cpu_time,
+                )
+                # Calculate per-phase network bytes (delta from phase start)
+                phase_data_bytes = max(
+                    0,
+                    self._metrics.network_bytes - self._phase_start_network_bytes,
+                )
                 self.update_phase_stats(
                     self._current_phase,
-                    cpu_time_seconds=self._metrics.cpu_time_seconds,
+                    cpu_time_seconds=phase_cpu_time,
                     peak_memory_mb=self._metrics.memory_peak_mb,
-                    data_bytes=self._metrics.network_bytes,
+                    data_bytes=phase_data_bytes,
                 )
 
             self._metrics.error_message = None
@@ -624,19 +648,19 @@ class PhaseStatusBar(Static):
 
         # Column widths for consistent alignment
         # Phase: 10 chars (includes 2-char status indicator space)
-        # Time: 8 chars, Data: 10 chars, CPU: 8 chars, Wall: 8 chars, Pkgs: 6 chars, Mem: 8 chars
+        # Wall: 8 chars, Data: 10 chars, CPU: 8 chars, Pkgs: 6 chars, Mem: 8 chars
+        # Removed redundant "Time" column (was same as "Wall")
         col_phase = 10
-        col_time = 8
+        col_wall = 8
         col_data = 10
         col_cpu = 8
-        col_wall = 8
         col_pkgs = 6
         col_mem = 8
 
         # Build table header with column widths for alignment
         header = (
-            f"{'Phase':<{col_phase}} │ {'Time':>{col_time}} │ {'Data':>{col_data}} │ "
-            f"{'CPU':>{col_cpu}} │ {'Wall':>{col_wall}} │ {'Pkgs':>{col_pkgs}} │ {'Mem':>{col_mem}}"
+            f"{'Phase':<{col_phase}} │ {'Wall':>{col_wall}} │ {'Data':>{col_data}} │ "
+            f"{'CPU':>{col_cpu}} │ {'Pkgs':>{col_pkgs}} │ {'Mem':>{col_mem}}"
         )
 
         # Format each phase row
@@ -658,10 +682,9 @@ class PhaseStatusBar(Static):
 
             return (
                 f"{phase_cell} │ "
-                f"{self._format_duration(stats.wall_time_seconds):>{col_time}} │ "
+                f"{self._format_duration(stats.wall_time_seconds):>{col_wall}} │ "
                 f"{self._format_bytes(stats.data_bytes):>{col_data}} │ "
                 f"{self._format_duration(stats.cpu_time_seconds):>{col_cpu}} │ "
-                f"{self._format_duration(stats.wall_time_seconds):>{col_wall}} │ "
                 f"{stats.packages:>{col_pkgs}} │ "
                 f"{mem_str:>{col_mem}}"
             )
@@ -670,10 +693,10 @@ class PhaseStatusBar(Static):
         download_row = format_phase_row(phase_stats["Download"])
         upgrade_row = format_phase_row(phase_stats["Upgrade"])
 
-        # Total row with running progress summary
+        # Total row
         total_row = format_phase_row(total_stats)
 
-        # Running progress summary (appended to display)
+        # Running progress summary (only show meaningful items)
         progress_parts = []
         if progress.predicted_wall_time_left is not None:
             progress_parts.append(
@@ -683,21 +706,23 @@ class PhaseStatusBar(Static):
             progress_parts.append(
                 f"DL Left: {self._format_bytes(progress.predicted_download_left)}"
             )
-        progress_parts.append(f"CPU: {self._format_duration(progress.cpu_time_so_far)}")
-        progress_parts.append(f"Peak: {progress.peak_memory_so_far:.0f}MB")
-
-        progress_summary = " │ ".join(progress_parts)
 
         # Add error indicator if needed
         if m.error_message:
-            progress_summary += f" │ [red]⚠ {m.error_message}[/red]"
+            progress_parts.append(f"[red]⚠ {m.error_message}[/red]")
 
         # Pause indicator
         if m.pause_after_phase:
-            progress_summary += " │ [yellow]⏸ Pause[/yellow]"
+            progress_parts.append("[yellow]⏸ Pause[/yellow]")
+
+        # Build progress summary (may be empty if no predictions/errors)
+        progress_summary = " │ ".join(progress_parts) if progress_parts else ""
 
         # Combine all lines
-        content = f"{header}\n{update_row}\n{download_row}\n{upgrade_row}\n{total_row} │ {progress_summary}"
+        if progress_summary:
+            content = f"{header}\n{update_row}\n{download_row}\n{upgrade_row}\n{total_row} │ {progress_summary}"
+        else:
+            content = f"{header}\n{update_row}\n{download_row}\n{upgrade_row}\n{total_row}"
 
         self.update(content)
 

@@ -2,3 +2,8 @@
 # Rich terminal UI components for update-all system
 
 import '../justfile-common-subproject.just'
+
+# Run UI latency measurement tests
+# These tests measure and verify UI latency targets from docs/ui-latency-planning.md
+test-ui-latency:
+    poetry run pytest tests/test_ui_latency_measurement.py -v -s

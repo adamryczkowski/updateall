@@ -398,10 +398,27 @@ class TerminalScreen:
     def resize(self, columns: int, lines: int) -> None:
         """Resize the terminal screen.
 
+        This method preserves history when the screen height is reduced.
+        Lines that would be clipped from the top are moved to the history
+        buffer before resizing, ensuring no output is lost.
+
         Args:
             columns: New terminal width in columns.
             lines: New terminal height in lines.
         """
+        old_lines = self._lines
+
+        # If reducing height, preserve lines that would be clipped to history
+        if lines < old_lines:
+            lines_to_preserve = old_lines - lines
+            # Get the lines from the top of the current screen buffer
+            # and add them to history before pyte clips them
+            for line_num in range(lines_to_preserve):
+                if line_num in self._screen.buffer:
+                    # Copy the line to history.top
+                    line_data = dict(self._screen.buffer[line_num])
+                    self._screen.history.top.append(line_data)
+
         self._columns = columns
         self._lines = lines
         self._screen.resize(lines=lines, columns=columns)

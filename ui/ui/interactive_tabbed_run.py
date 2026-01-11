@@ -68,6 +68,66 @@ if TYPE_CHECKING:
     from core.models import PluginConfig
 
 
+def _format_box(
+    title: str,
+    lines: list[str],
+    color_code: str = "32",
+    min_width: int = 40,
+) -> str:
+    """Format a box with dynamic width based on content.
+
+    Creates a Unicode box with a title in the top border and content lines.
+    The box width adjusts to fit the longest line.
+
+    Args:
+        title: Title to display in the top border (e.g., "Phase: CHECK").
+        lines: Content lines to display inside the box.
+        color_code: ANSI color code (e.g., "32" for green, "31" for red).
+        min_width: Minimum inner width (content area).
+
+    Returns:
+        Formatted box string with ANSI escape codes.
+    """
+    # Calculate the inner width needed for content (space between │ and │)
+    content_width = max(len(line) for line in lines) if lines else 0
+    # Title format: "╭─ {title} ─...─╮" - we need inner_width chars between ╭ and ╮
+    # That's: "─ " + title + " " + padding + "─" = inner_width
+    # So title needs: 2 + len(title) + 1 + padding + 1 = inner_width
+    # Minimum inner width for title = len(title) + 4
+    title_min_width = len(title) + 4
+
+    # Inner width is the max of content, title requirement, and minimum
+    # Add 1 to content_width because content lines have "│ {content} │" format
+    # where content is padded to inner_width - 1 (for the leading space)
+    inner_width = max(content_width + 1, title_min_width, min_width)
+
+    # Build the top border with title centered
+    top_padding = inner_width - len(title) - 3
+    top_border = "╭─ " + title + " " + "─" * top_padding + "╮"
+
+    # Build content lines with padding to match box width
+    content_lines = []
+    for line in lines:
+        padded_line = line.ljust(inner_width - 1)
+        content_lines.append(f"│ {padded_line}│")
+
+    # Build bottom border: ╰ + "─" * inner_width + ╯
+    # Total width = 1 + inner_width + 1 = inner_width + 2 (matches content lines)
+    bottom_border = "╰" + "─" * inner_width + "╯"
+
+    # Verify all lines have same width (top border should also be inner_width + 2)
+    # top_border = "╭" + (inner_width chars) + "╮" = inner_width + 2 ✓
+
+    # Combine with ANSI colors
+    result = f"\r\n\x1b[{color_code}m{top_border}\x1b[0m\r\n"
+    for content_line in content_lines:
+        # Color only the box characters, not the content
+        result += f"\x1b[{color_code}m│\x1b[0m{content_line[1:-1]}\x1b[{color_code}m│\x1b[0m\r\n"
+    result += f"\x1b[{color_code}m{bottom_border}\x1b[0m\r\n"
+
+    return result
+
+
 def _get_ui_version() -> str:
     """Get the UI package version."""
     try:
@@ -530,13 +590,15 @@ class InteractiveTabbedApp(App[None]):
 
                     # Display message in the terminal view
                     if pane.terminal_view:
-                        msg = (
-                            f"\r\n\x1b[33m╭─ Not Applicable ───────────────────────────╮\x1b[0m\r\n"
-                            f"\x1b[33m│\x1b[0m Plugin: {plugin_name}\r\n"
-                            f"\x1b[33m│\x1b[0m\r\n"
-                            f"\x1b[33m│\x1b[0m Required tools are not installed.\r\n"
-                            f"\x1b[33m│\x1b[0m This plugin will be skipped.\r\n"
-                            f"\x1b[33m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                        msg = _format_box(
+                            title="Not Applicable",
+                            lines=[
+                                f"Plugin: {plugin_name}",
+                                "",
+                                "Required tools are not installed.",
+                                "This plugin will be skipped.",
+                            ],
+                            color_code="33",  # Yellow
                         )
                         pane.terminal_view.feed(msg.encode("utf-8"))
 
@@ -560,15 +622,17 @@ class InteractiveTabbedApp(App[None]):
 
                 # Display pause message in the terminal view
                 if pane.terminal_view:
-                    pause_msg = (
-                        f"\r\n\x1b[36m╭─ Paused ────────────────────────────────────╮\x1b[0m\r\n"
-                        f"\x1b[36m│\x1b[0m Plugin: {plugin_name}\r\n"
-                        f"\x1b[36m│\x1b[0m Next Phase: {phase_name}\r\n"
-                        f"\x1b[36m│\x1b[0m\r\n"
-                        f"\x1b[36m│\x1b[0m Waiting for user to start.\r\n"
-                        f"\x1b[36m│\x1b[0m Press Ctrl+R to start this phase.\r\n"
-                        f"\x1b[36m│\x1b[0m Press Ctrl+P to toggle auto-pause.\r\n"
-                        f"\x1b[36m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                    pause_msg = _format_box(
+                        title="Paused",
+                        lines=[
+                            f"Plugin: {plugin_name}",
+                            f"Next Phase: {phase_name}",
+                            "",
+                            "Waiting for user to start.",
+                            "Press Ctrl+R to start this phase.",
+                            "Press Ctrl+P to toggle auto-pause.",
+                        ],
+                        color_code="36",  # Cyan
                     )
                     pane.terminal_view.feed(pause_msg.encode("utf-8"))
 
@@ -649,11 +713,12 @@ class InteractiveTabbedApp(App[None]):
 
         # Display phase start message
         if pane.terminal_view:
-            phase_msg = (
-                f"\r\n\x1b[32m╭─ Phase: {current_phase.value} ─────────────────────────╮\x1b[0m\r\n"
-                f"\x1b[32m│\x1b[0m Command: {' '.join(command)}\r\n"
-                f"\x1b[32m╰─────────────────────────────────────────────╯\x1b[0m\r\n\r\n"
+            phase_msg = _format_box(
+                title=f"Phase: {current_phase.value}",
+                lines=[f"Command: {' '.join(command)}"],
+                color_code="32",  # Green
             )
+            phase_msg += "\r\n"  # Extra newline after box
             pane.terminal_view.feed(phase_msg.encode("utf-8"))
 
         self._update_tab_visual(plugin_name, tab_data)
@@ -693,12 +758,14 @@ class InteractiveTabbedApp(App[None]):
 
             # Display error in the terminal view
             if pane.terminal_view:
-                error_display = (
-                    f"\r\n\x1b[31m╭─ Error ─────────────────────────────────────╮\x1b[0m\r\n"
-                    f"\x1b[31m│\x1b[0m Failed to start plugin: {plugin_name}\r\n"
-                    f"\x1b[31m│\x1b[0m\r\n"
-                    f"\x1b[31m│\x1b[0m {error_msg}\r\n"
-                    f"\x1b[31m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                error_display = _format_box(
+                    title="Error",
+                    lines=[
+                        f"Failed to start plugin: {plugin_name}",
+                        "",
+                        error_msg,
+                    ],
+                    color_code="31",  # Red
                 )
                 pane.terminal_view.feed(error_display.encode("utf-8"))
 
@@ -837,13 +904,15 @@ class InteractiveTabbedApp(App[None]):
                         tab_data.state = PaneState.IDLE
                         pane = self.terminal_panes.get(plugin_name)
                         if pane and pane.terminal_view:
-                            pause_msg = (
-                                f"\r\n\x1b[36m╭─ Phase Complete ────────────────────────────╮\x1b[0m\r\n"
-                                f"\x1b[36m│\x1b[0m Completed: {current_phase.value}\r\n"
-                                f"\x1b[36m│\x1b[0m Next Phase: {next_phase.value}\r\n"
-                                f"\x1b[36m│\x1b[0m\r\n"
-                                f"\x1b[36m│\x1b[0m Press Ctrl+R to continue.\r\n"
-                                f"\x1b[36m╰─────────────────────────────────────────────╯\x1b[0m\r\n"
+                            pause_msg = _format_box(
+                                title="Phase Complete",
+                                lines=[
+                                    f"Completed: {current_phase.value}",
+                                    f"Next Phase: {next_phase.value}",
+                                    "",
+                                    "Press Ctrl+R to continue.",
+                                ],
+                                color_code="36",  # Cyan
                             )
                             pane.terminal_view.feed(pause_msg.encode("utf-8"))
 

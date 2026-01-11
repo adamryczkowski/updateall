@@ -7,6 +7,7 @@ Phase 2 - Terminal Emulation
 See docs/interactive-tabs-implementation-plan.md section 3.2.1
 
 Enhanced with mouse wheel and arrow key scrolling support.
+Enhanced with text selection support (click-drag to select, auto-copy to clipboard).
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from textual.widgets import Static
 if TYPE_CHECKING:
     from textual.app import RenderResult
     from textual.geometry import Size
+    from textual.selection import Selection
 
 from ui.terminal_screen import StyledChar, TerminalScreen
 
@@ -94,10 +96,14 @@ class TerminalView(Static):
     - Scrollback buffer navigation
     - Resize handling
     - Mouse wheel scrolling support
+    - Text selection with auto-copy to clipboard
 
     The widget is focusable (can_focus=True) to ensure it receives mouse
     events for scrolling. This is necessary because Static widgets don't
     receive mouse events by default in Textual.
+
+    Text selection works via click-and-drag. Selected text is automatically
+    copied to the clipboard (like Windows Terminal behavior).
 
     Example:
         view = TerminalView(columns=80, lines=24)
@@ -111,6 +117,9 @@ class TerminalView(Static):
     # Enable focus to receive mouse events
     # This is a class variable that Textual checks
     can_focus = True
+
+    # Enable text selection support
+    ALLOW_SELECT = True
 
     # CSS styling
     DEFAULT_CSS = """
@@ -423,3 +432,48 @@ class TerminalView(Static):
         """
         self.scroll_history_down(lines=3)
         event.stop()
+
+    # Text selection support methods
+    @property
+    def allow_select(self) -> bool:
+        """Check if this widget permits text selection.
+
+        Always returns True for TerminalView to enable text selection.
+
+        Returns:
+            True, indicating text selection is allowed.
+        """
+        return True
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        """Get the text under the selection.
+
+        Extracts text from the terminal screen based on the selection range.
+        The text is automatically copied to clipboard by Textual's selection
+        mechanism when the user presses Ctrl+C or when selection ends.
+
+        Args:
+            selection: Selection information containing start/end positions.
+
+        Returns:
+            Tuple of (extracted text, line ending) or None if no text.
+        """
+        # Get all terminal content as a single string with newlines
+        lines = []
+        for line_num in range(self._terminal_screen.lines):
+            styled_chars = self._terminal_screen.get_styled_line(line_num)
+            line_text = "".join(char.data for char in styled_chars)
+            lines.append(line_text.rstrip())  # Strip trailing whitespace
+
+        text = "\n".join(lines)
+        return selection.extract(text), "\n"
+
+    def selection_updated(self, _selection: Selection | None) -> None:
+        """Called when the selection is updated.
+
+        Refreshes the widget display to show selection highlighting.
+
+        Args:
+            _selection: Selection information or None if selection cleared.
+        """
+        self._update_display()

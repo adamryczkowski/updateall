@@ -68,26 +68,71 @@ if TYPE_CHECKING:
     from core.models import PluginConfig
 
 
+def _truncate_middle(text: str, max_len: int, ellipsis: str = "...") -> str:
+    """Truncate a string in the middle, preserving start and end.
+
+    This is useful for paths where the basename (end) is more important
+    than the full directory structure.
+
+    Args:
+        text: The string to truncate.
+        max_len: Maximum length of the result.
+        ellipsis: String to use as ellipsis (default "...").
+
+    Returns:
+        Truncated string with ellipsis in the middle, or original if it fits.
+
+    Example:
+        >>> _truncate_middle("/home/user/long/path/to/script.sh", 30)
+        '/home/user/.../to/script.sh'
+    """
+    if len(text) <= max_len:
+        return text
+
+    if max_len <= len(ellipsis):
+        return ellipsis[:max_len]
+
+    # Calculate how much space we have for content (excluding ellipsis)
+    available = max_len - len(ellipsis)
+
+    # Split roughly in half, but favor the end (basename is more important)
+    # Give 40% to start, 60% to end
+    start_len = available * 2 // 5
+    end_len = available - start_len
+
+    return text[:start_len] + ellipsis + text[-end_len:]
+
+
 def _format_box(
     title: str,
     lines: list[str],
     color_code: str = "32",
     min_width: int = 40,
+    max_width: int | None = None,
 ) -> str:
     """Format a box with dynamic width based on content.
 
     Creates a Unicode box with a title in the top border and content lines.
-    The box width adjusts to fit the longest line.
+    The box width adjusts to fit the longest line, but respects max_width
+    to prevent wrapping in narrow terminals.
 
     Args:
         title: Title to display in the top border (e.g., "Phase: CHECK").
         lines: Content lines to display inside the box.
         color_code: ANSI color code (e.g., "32" for green, "31" for red).
         min_width: Minimum inner width (content area).
+        max_width: Maximum total box width (including borders). If None,
+                   defaults to 78 (safe for 80-column terminals).
 
     Returns:
         Formatted box string with ANSI escape codes.
     """
+    # Default max_width to 78 to fit in 80-column terminals with some margin
+    # The box has 2 border characters (╭/╰ and ╮/╯), so inner width = max_width - 2
+    if max_width is None:
+        max_width = 78
+    max_inner_width = max_width - 2
+
     # Calculate the inner width needed for content (space between │ and │)
     content_width = max(len(line) for line in lines) if lines else 0
     # Title format: "╭─ {title} ─...─╮" - we need inner_width chars between ╭ and ╮
@@ -101,13 +146,27 @@ def _format_box(
     # where content is padded to inner_width - 1 (for the leading space)
     inner_width = max(content_width + 1, title_min_width, min_width)
 
+    # Clamp to max_inner_width to prevent wrapping
+    inner_width = min(inner_width, max_inner_width)
+
+    # Truncate lines that are too long (leave space for "│ " prefix and "│" suffix)
+    # Content area is inner_width - 1 (for the leading space after │)
+    max_content_len = inner_width - 1
+    truncated_lines = []
+    for line in lines:
+        if len(line) > max_content_len:
+            # Use middle truncation to preserve the end (basename for paths)
+            truncated_lines.append(_truncate_middle(line, max_content_len))
+        else:
+            truncated_lines.append(line)
+
     # Build the top border with title centered
     top_padding = inner_width - len(title) - 3
     top_border = "╭─ " + title + " " + "─" * top_padding + "╮"
 
     # Build content lines with padding to match box width
     content_lines = []
-    for line in lines:
+    for line in truncated_lines:
         padded_line = line.ljust(inner_width - 1)
         content_lines.append(f"│ {padded_line}│")
 

@@ -24,6 +24,7 @@ This document outlines the implementation plan for enhancing the interactive UI 
 5. [Test Specifications](#5-test-specifications)
 6. [Risk Analysis](#6-risk-analysis)
 7. [Timeline](#7-timeline)
+8. [UI Latency Improvement Architecture](#8-ui-latency-improvement-architecture)
 
 ---
 
@@ -634,6 +635,109 @@ class ResourceLimits:
 - [x] Performance optimization
 - [x] Documentation updates
 - [x] Migration guide for existing users
+
+---
+
+## 8. UI Latency Improvement Architecture
+
+This section documents the decoupled UI refresh architecture implemented to improve perceived UI responsiveness.
+
+### 8.1 Problem Statement
+
+The original UI refresh rate was **1 Hz** (1 update per second), causing a perceptible lag in the status bar and metrics display. This was because UI updates were coupled to metrics collection, which uses expensive `psutil` calls.
+
+### 8.2 Solution: Decoupled Architecture
+
+The solution decouples UI rendering from metrics collection:
+
+- **Metrics Collection**: Runs at 0.5-1.0 Hz (expensive `psutil` calls) in a background thread
+- **UI Rendering**: Runs at 30 Hz using Textual's `auto_refresh` mechanism
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Decoupled UI Refresh Architecture                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Background Thread (1 Hz)                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  TerminalPane._run_metrics_collection_worker()                      │    │
+│  │       │                                                              │    │
+│  │       ├──► MetricsCollector.collect()  [psutil calls]               │    │
+│  │       │         │                                                    │    │
+│  │       │         └──► Updates _metrics and _cached_metrics           │    │
+│  │       │                                                              │    │
+│  │       └──► time.sleep(1.0)                                          │    │
+│  │                                                                      │    │
+│  │  Uses Textual's @work(thread=True) decorator for:                   │    │
+│  │  - Automatic cancellation on widget unmount                         │    │
+│  │  - Thread-safe integration with Textual's worker lifecycle          │    │
+│  │  - Clean cancellation via get_current_worker().is_cancelled         │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                          │                                                   │
+│                          │ (shared data via cached_metrics)                  │
+│                          ▼                                                   │
+│  Main Thread (30 Hz via auto_refresh)                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PhaseStatusBar.automatic_refresh()                                 │    │
+│  │       │                                                              │    │
+│  │       ├──► Read MetricsCollector.cached_metrics  [fast, no psutil] │    │
+│  │       │                                                              │    │
+│  │       └──► _refresh_display()                                       │    │
+│  │                                                                      │    │
+│  │  Triggered by Textual's auto_refresh property:                      │    │
+│  │  - self.auto_refresh = 1.0 / ui_refresh_rate  (e.g., 0.033s)       │    │
+│  │  - Reads cached metrics without triggering psutil                   │    │
+│  │  - Updates display at 30 Hz for smooth UI                           │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.3 Key Components
+
+| Component | File | Role |
+|-----------|------|------|
+| `TerminalPane._run_metrics_collection_worker()` | [`ui/ui/terminal_pane.py`](../ui/ui/terminal_pane.py) | Thread worker for metrics collection at 1 Hz |
+| `PhaseStatusBar.automatic_refresh()` | [`ui/ui/phase_status_bar.py`](../ui/ui/phase_status_bar.py) | UI refresh at 30 Hz using cached metrics |
+| `MetricsCollector.cached_metrics` | [`ui/ui/metrics.py`](../ui/ui/metrics.py) | Thread-safe cached metrics for fast reads |
+| `PaneConfig.ui_refresh_rate` | [`ui/ui/terminal_pane.py`](../ui/ui/terminal_pane.py) | Configurable UI refresh rate (default: 30 Hz) |
+
+### 8.4 Configuration
+
+The refresh rates are configurable via `PaneConfig`:
+
+```python
+@dataclass
+class PaneConfig:
+    # Metrics collection interval (expensive psutil calls)
+    metrics_update_interval: float = 1.0  # 1 Hz
+
+    # UI refresh rate (reads cached metrics)
+    ui_refresh_rate: float = 30.0  # 30 Hz
+```
+
+### 8.5 Performance Metrics
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Status bar refresh rate | 1 Hz | 30 Hz |
+| Perceived UI latency | 1000ms | ~33ms |
+| Metrics collection rate | 1 Hz | 1 Hz (unchanged) |
+| Cached metrics access | N/A | < 1ms |
+
+### 8.6 Thread Safety
+
+The `MetricsCollector` ensures thread safety through:
+
+1. **Atomic cache updates**: `_cached_metrics` is updated atomically after collection
+2. **Read-only access**: `cached_metrics` property returns a copy of the cached data
+3. **Worker lifecycle**: Textual's `@work` decorator manages thread lifecycle
+
+### 8.7 Related Documentation
+
+- [`docs/ui-latency-study.md`](ui-latency-study.md) - Analysis and recommendations
+- [`docs/ui-latency-planning.md`](ui-latency-planning.md) - Implementation milestones
+- [`ui/tests/test_ui_latency_measurement.py`](../ui/tests/test_ui_latency_measurement.py) - Latency tests
 
 ---
 

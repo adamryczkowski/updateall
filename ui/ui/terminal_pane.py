@@ -3,14 +3,38 @@
 This module provides a TerminalPane widget that combines a TerminalView
 with a status bar and manages the connection between the view and a PTY session.
 
+Architecture Overview
+---------------------
+The TerminalPane implements a decoupled UI refresh architecture to achieve
+smooth 30 Hz UI updates while expensive metrics collection (psutil) runs
+at 1 Hz in a background thread.
+
+Key components:
+- **Metrics Collection Thread**: Uses Textual's @work(thread=True) decorator
+  to run MetricsCollector.collect() at 1 Hz in a background thread. This
+  updates _cached_metrics atomically.
+- **UI Refresh Loop**: PhaseStatusBar.automatic_refresh() runs at 30 Hz via
+  Textual's auto_refresh mechanism, reading cached metrics without blocking.
+
+This decoupling ensures:
+- Perceived UI latency of ~33ms (vs 1000ms before)
+- No UI blocking during expensive psutil calls
+- Thread-safe metrics access via cached_metrics property
+
+Configuration:
+- PaneConfig.metrics_update_interval: Collection rate (default: 1.0s)
+- PaneConfig.ui_refresh_rate: UI refresh rate (default: 30.0 Hz)
+
+Related Documentation:
+- docs/UI-revision-plan.md section 8 - UI Latency Improvement Architecture
+- docs/ui-latency-planning.md - Implementation milestones
+- docs/ui-latency-study.md - Analysis and recommendations
+
 Phase 4 - Integration
 See docs/interactive-tabs-implementation-plan.md section 3.2.5
 
 UI Revision Plan - Phase 3 Status Bar
 See docs/UI-revision-plan.md section 3.4
-
-UI Latency Improvement - Milestone 4: Thread Worker Optimization
-See docs/ui-latency-planning.md section "Milestone 4"
 """
 
 from __future__ import annotations
@@ -717,21 +741,6 @@ class TerminalPane(Container):
                 "Metrics collection worker stopped for pane %s",
                 self.pane_id,
             )
-
-    def _collect_metrics_sync(self) -> None:
-        """Synchronously collect metrics and update the status bar.
-
-        This method is designed to be called from a thread to ensure
-        metrics collection doesn't block the event loop.
-
-        Note: This method is kept for backward compatibility but
-        is no longer used in the main metrics loop. The UI now
-        updates via PhaseStatusBar.automatic_refresh(), and metrics
-        collection is handled by the _run_metrics_collection_worker()
-        thread worker (Milestone 4).
-        """
-        if self._phase_status_bar:
-            self._phase_status_bar.collect_and_update()
 
     def update_phase_metrics(
         self,

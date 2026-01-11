@@ -3,14 +3,39 @@
 This module provides a PhaseStatusBar widget that displays runtime metrics
 for each terminal pane, including status, ETA, resource usage, and progress.
 
+Decoupled UI Refresh Architecture
+---------------------------------
+The PhaseStatusBar implements a high-frequency UI refresh mechanism that is
+decoupled from the expensive metrics collection (psutil calls):
+
+- **UI Refresh (30 Hz)**: The `automatic_refresh()` method is called by
+  Textual's auto_refresh mechanism at 30 Hz. It reads cached metrics from
+  MetricsCollector.cached_metrics (fast, no psutil) and updates the display.
+
+- **Metrics Collection (1 Hz)**: The actual psutil calls happen in a
+  background thread managed by TerminalPane._run_metrics_collection_worker().
+  This updates _cached_metrics atomically.
+
+This decoupling achieves:
+- Perceived UI latency of ~33ms (vs 1000ms before)
+- Smooth status bar updates without blocking
+- Thread-safe metrics access
+
+Key Methods:
+- `on_mount()`: Sets up auto_refresh at the configured UI refresh rate
+- `automatic_refresh()`: Called at 30 Hz, reads cached metrics
+- `_refresh_display()`: Renders the 5-line statistics table
+
+Configuration:
+- `ui_refresh_rate`: UI refresh rate in Hz (default: 30.0)
+- `DEFAULT_UI_REFRESH_RATE`: Class-level default (30.0 Hz)
+
+Related Documentation:
+- docs/UI-revision-plan.md section 8 - UI Latency Improvement Architecture
+- docs/ui-latency-planning.md - Implementation milestones
+
 UI Revision Plan - Phase 3 Status Bar
 See docs/UI-revision-plan.md section 3.4
-
-Milestone 3 - Textual Library Usage Review and Fixes
-See docs/cleanup-and-refactoring-plan.md section 3.3.1
-
-Milestone 4 - UI Module Architecture Refactoring
-See docs/cleanup-and-refactoring-plan.md section 4.3.2
 
 Enhanced to 5-line display with statistics table showing:
 - Phase rows: Update, Download, Upgrade, Total

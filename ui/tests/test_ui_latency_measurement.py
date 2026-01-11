@@ -6,13 +6,62 @@ See docs/ui-latency-planning.md section "Milestone 2: Add UI Latency Tests"
 This module provides automated tests to measure and verify UI latency,
 ensuring the decoupled architecture achieves the target refresh rates.
 
-Test Targets:
-    - test_measure_latency_during_idle: Mean idle latency < 10ms
-    - test_measure_input_response_latency: P95 input latency < 100ms
-    - test_measure_latency_during_plugin_execution: P95 < 100ms, max < 500ms
+Architecture Background
+-----------------------
+The UI latency tests verify the decoupled refresh architecture where:
+- Metrics collection runs at 1 Hz in a background thread (expensive psutil calls)
+- UI refresh runs at 30 Hz via Textual's auto_refresh (reads cached metrics)
+
+This decoupling reduces perceived UI latency from ~1000ms to ~33ms.
+
+Test Thresholds
+---------------
+Two sets of thresholds are used:
+
+**Aspirational Targets** (after all improvements complete):
+- Idle latency: Mean < 10ms
+- Input response: P95 < 100ms
+- During execution: P95 < 100ms, max < 500ms
+
+**CI Thresholds** (lenient for variable CI environments):
+- Idle latency: Mean < 10ms, P95 < 50ms
+- Input response: P95 < 500ms, mean < 200ms
+- During execution: P95 < 1000ms, max < 5000ms
+- Multi-plugin load: P95 < 2000ms
+- Scrollback access: Mean < 100ms
+
+The CI thresholds are more lenient to account for:
+- Variable CI environment performance
+- Occasional spikes due to system load
+- Different hardware capabilities
+
+Test Categories
+---------------
+1. **LatencyReport Tests**: Verify the statistics helper class
+2. **Idle Latency Tests**: Measure latency when app is idle
+3. **Input Response Tests**: Measure key press processing time
+4. **Plugin Execution Tests**: Measure latency during active plugin runs
+5. **Load Tests**: Measure latency under various load conditions
+6. **Cached Metrics Tests**: Verify cached access is sub-millisecond
+
+Methodology
+-----------
+Each test:
+1. Creates a test app with mock plugins
+2. Performs repeated measurements (50-1000 iterations)
+3. Computes statistics (mean, median, P95, P99, min, max)
+4. Asserts against the appropriate threshold
+
+The tests use `time.perf_counter()` for high-resolution timing and
+`LatencyReport.from_samples()` for statistical analysis.
+
+Related Documentation:
+- docs/UI-revision-plan.md section 8 - UI Latency Improvement Architecture
+- docs/ui-latency-planning.md - Implementation milestones
+- docs/ui-latency-study.md - Analysis and recommendations
 
 The tests use the `@pytest.mark.slow` marker for CI optimization,
-allowing them to be skipped in fast test runs.
+allowing them to be skipped in fast test runs with: pytest -m "not slow"
 """
 
 from __future__ import annotations

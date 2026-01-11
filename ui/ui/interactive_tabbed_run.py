@@ -149,9 +149,9 @@ def _format_box(
     # Clamp to max_inner_width to prevent wrapping
     inner_width = min(inner_width, max_inner_width)
 
-    # Truncate lines that are too long (leave space for "│ " prefix and "│" suffix)
-    # Content area is inner_width - 1 (for the leading space after │)
-    max_content_len = inner_width - 1
+    # Truncate lines that are too long (leave space for "│ " prefix and " │" suffix)
+    # Content area is inner_width - 2 (for the leading and trailing space)
+    max_content_len = inner_width - 2
     truncated_lines = []
     for line in lines:
         if len(line) > max_content_len:
@@ -165,10 +165,11 @@ def _format_box(
     top_border = "╭─ " + title + " " + "─" * top_padding + "╮"
 
     # Build content lines with padding to match box width
+    # Format: "│ {content} │" where content is padded to inner_width - 2
     content_lines = []
     for line in truncated_lines:
-        padded_line = line.ljust(inner_width - 1)
-        content_lines.append(f"│ {padded_line}│")
+        padded_line = line.ljust(inner_width - 2)
+        content_lines.append(f"│ {padded_line} │")
 
     # Build bottom border: ╰ + "─" * inner_width + ╯
     # Total width = 1 + inner_width + 1 = inner_width + 2 (matches content lines)

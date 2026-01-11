@@ -8,6 +8,9 @@ See docs/interactive-tabs-implementation-plan.md section 3.2.5
 
 UI Revision Plan - Phase 3 Status Bar
 See docs/UI-revision-plan.md section 3.4
+
+UI Latency Improvement - Milestone 4: Thread Worker Optimization
+See docs/ui-latency-planning.md section "Milestone 4"
 """
 
 from __future__ import annotations
@@ -15,11 +18,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
+from textual import work
 from textual.containers import Container
 from textual.events import (  # noqa: TC002 - Required at runtime for event dispatch
     MouseScrollDown,
@@ -29,6 +34,7 @@ from textual.events import (  # noqa: TC002 - Required at runtime for event disp
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Static
+from textual.worker import Worker, get_current_worker
 
 from ui.input_router import InputRouter
 from ui.key_bindings import KeyBindings
@@ -304,7 +310,9 @@ class TerminalPane(Container):
         # Phase 3: Status bar with metrics
         self._phase_status_bar: PhaseStatusBar | None = None
         self._metrics_collector: MetricsCollector | None = None
-        self._metrics_update_task: asyncio.Task[None] | None = None
+        # Milestone 4: Worker reference for metrics collection
+        # Workers are managed by Textual and automatically cancelled on unmount
+        self._metrics_worker: Worker[None] | None = None
 
     @property
     def state(self) -> PaneState:
@@ -506,7 +514,9 @@ class TerminalPane(Container):
                     self._metrics_collector.start()
 
             self._metrics_collector.update_status("In Progress")
-            self._metrics_update_task = asyncio.create_task(self._metrics_update_loop())
+            # Milestone 4: Use Textual's @work decorator for thread-based metrics collection
+            # This provides cleaner thread management with automatic cancellation on unmount
+            self._metrics_worker = self._run_metrics_collection_worker()
 
         # Post state change message
         self.post_message(PaneStateChanged(self.pane_id, self._state))
@@ -514,18 +524,18 @@ class TerminalPane(Container):
     async def stop(self) -> None:
         """Stop the PTY session.
 
-        Note: This method stops the metrics update task but preserves the
+        Note: This method stops the metrics worker but preserves the
         MetricsCollector instance. This is intentional - the MetricsCollector
         holds accumulated phase statistics that must be preserved across
         phase transitions. The collector will be reused when start() is
         called for the next phase.
         """
-        # Phase 3: Stop metrics update task (but preserve the collector!)
-        if self._metrics_update_task is not None:
-            self._metrics_update_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._metrics_update_task
-            self._metrics_update_task = None
+        # Milestone 4: Cancel the metrics worker (but preserve the collector!)
+        # Workers are managed by Textual and will be cleaned up automatically,
+        # but we cancel explicitly to stop metrics collection immediately.
+        if self._metrics_worker is not None:
+            self._metrics_worker.cancel()
+            self._metrics_worker = None
 
         # Stop the metrics collector but DON'T set it to None
         # The collector holds accumulated _phase_stats that must be preserved
@@ -648,34 +658,50 @@ class TerminalPane(Container):
             if self._exit_code is not None:
                 self._status_bar.status_message = f"Exit code: {self._exit_code}"
 
-    async def _metrics_update_loop(self) -> None:
-        """Background task to periodically collect metrics.
+    @work(thread=True, exit_on_error=False, group="metrics", name="metrics_collection")
+    def _run_metrics_collection_worker(self) -> None:
+        """Thread worker to periodically collect metrics.
 
-        This task runs while the PTY session is active and collects
-        metrics at regular intervals (default: 1 Hz). The collected
-        metrics are cached in the MetricsCollector for fast reads.
+        Milestone 4: This method uses Textual's @work decorator with thread=True
+        to run metrics collection in a background thread. This provides:
+        - Cleaner thread management with automatic cancellation on unmount
+        - Proper integration with Textual's worker lifecycle
+        - Thread-safe cancellation via get_current_worker().is_cancelled
 
-        The UI update is now decoupled from metrics collection:
-        - This loop: Collects metrics at 1 Hz (expensive psutil calls)
+        The UI update is decoupled from metrics collection:
+        - This worker: Collects metrics at 1 Hz (expensive psutil calls)
         - PhaseStatusBar.automatic_refresh(): Updates UI at 30 Hz (reads cache)
 
-        The metrics collection is run in a separate thread using
-        asyncio.to_thread() to ensure it continues to run even when
-        the main event loop is busy with CPU-bound work.
+        Note: This is a regular function (not async) because thread=True requires
+        a synchronous function. The worker runs in a separate thread managed by
+        Textual's worker system.
         """
+        worker = get_current_worker()
+        interval = self.config.metrics_update_interval
+
+        _latency_logger.debug(
+            "Starting metrics collection worker for pane %s (interval: %.1fs)",
+            self.pane_id,
+            interval,
+        )
+
         try:
-            while self._state == PaneState.RUNNING:
+            while not worker.is_cancelled and self._state == PaneState.RUNNING:
                 if self._metrics_collector:
-                    # Run metrics collection in a thread to avoid blocking
-                    # the event loop and ensure updates continue during
-                    # CPU-bound operations. The collected metrics are cached
-                    # and will be read by PhaseStatusBar.automatic_refresh()
-                    await asyncio.to_thread(self._collect_metrics_only)
-                await asyncio.sleep(self.config.metrics_update_interval)
-        except asyncio.CancelledError:
-            pass
+                    # Collect metrics - this updates _metrics and _cached_metrics
+                    self._metrics_collector.collect()
+                    _latency_logger.debug(
+                        "Metrics collected for pane %s (interval: %.1fs)",
+                        self.pane_id,
+                        interval,
+                    )
+
+                # Sleep for the configured interval
+                # Use time.sleep since we're in a thread, not asyncio.sleep
+                time.sleep(interval)
+
         finally:
-            # Update final status when loop ends
+            # Update final status when worker ends
             if self._metrics_collector:
                 status_map = {
                     PaneState.SUCCESS: "Completed",
@@ -685,38 +711,24 @@ class TerminalPane(Container):
                 final_status = status_map.get(self._state, "Stopped")
                 self._metrics_collector.update_status(final_status)
                 # Final collection to update cache with final status
-                await asyncio.to_thread(self._collect_metrics_only)
+                self._metrics_collector.collect()
 
-    def _collect_metrics_only(self) -> None:
-        """Synchronously collect metrics without updating the UI.
-
-        This method collects metrics using psutil and caches them
-        in the MetricsCollector. The UI reads from this cache at
-        a higher frequency via PhaseStatusBar.automatic_refresh().
-
-        This method is designed to be called from a thread via
-        asyncio.to_thread() to ensure metrics collection doesn't
-        block the event loop.
-        """
-        if self._metrics_collector:
-            # Just collect - this updates _metrics and _cached_metrics
-            self._metrics_collector.collect()
             _latency_logger.debug(
-                "Metrics collected for pane %s (interval: %.1fs)",
+                "Metrics collection worker stopped for pane %s",
                 self.pane_id,
-                self.config.metrics_update_interval,
             )
 
     def _collect_metrics_sync(self) -> None:
         """Synchronously collect metrics and update the status bar.
 
-        This method is designed to be called from a thread via
-        asyncio.to_thread() to ensure metrics collection doesn't
-        block the event loop.
+        This method is designed to be called from a thread to ensure
+        metrics collection doesn't block the event loop.
 
         Note: This method is kept for backward compatibility but
         is no longer used in the main metrics loop. The UI now
-        updates via PhaseStatusBar.automatic_refresh().
+        updates via PhaseStatusBar.automatic_refresh(), and metrics
+        collection is handled by the _run_metrics_collection_worker()
+        thread worker (Milestone 4).
         """
         if self._phase_status_bar:
             self._phase_status_bar.collect_and_update()

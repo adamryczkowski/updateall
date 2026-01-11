@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console, Group
 from rich.style import Style
 from rich.text import Text
+from textual import events  # noqa: TC002 - Required at runtime for mouse event handlers
 from textual.events import MouseScrollDown, MouseScrollUp  # noqa: TC002 - Required at runtime
 from textual.reactive import reactive
 from textual.strip import Strip
@@ -25,7 +26,6 @@ from textual.widgets import Static
 if TYPE_CHECKING:
     from textual.app import RenderResult
     from textual.geometry import Size
-    from textual.selection import Selection
 
 from ui.terminal_screen import StyledChar, TerminalScreen
 
@@ -118,8 +118,9 @@ class TerminalView(Static):
     # This is a class variable that Textual checks
     can_focus = True
 
-    # Enable text selection support
-    ALLOW_SELECT = True
+    # Disable Textual's built-in selection system - we use our own custom implementation
+    # for better performance and to properly clear selection when content changes
+    ALLOW_SELECT = False
 
     # CSS styling
     DEFAULT_CSS = """
@@ -161,6 +162,11 @@ class TerminalView(Static):
             lines=lines,
             scrollback_lines=scrollback_lines,
         )
+
+        # Selection state (custom implementation, not using Textual's selection system)
+        self._selection_start: tuple[int, int] | None = None  # (col, row)
+        self._selection_end: tuple[int, int] | None = None  # (col, row)
+        self._is_selecting: bool = False
 
     @property
     def terminal_screen(self) -> TerminalScreen:
@@ -208,6 +214,12 @@ class TerminalView(Static):
         Args:
             data: Bytes to feed (may contain ANSI escape sequences).
         """
+        # Clear selection when new content arrives (selection doesn't travel with text)
+        if self.has_selection:
+            self._selection_start = None
+            self._selection_end = None
+            self._is_selecting = False
+
         self._terminal_screen.feed(data)
 
         # Update the Static widget's content with the rendered terminal lines
@@ -318,9 +330,20 @@ class TerminalView(Static):
         """
         text = Text()
 
+        # Get selection range for this line (only if selecting)
+        select_start_col, select_end_col = self._get_line_selection(line_num)
+
         for col, char in enumerate(styled_chars):
             # Build style from character attributes
             style = self._build_style(char)
+
+            # Selection highlighting (applied first, before cursor)
+            if (
+                select_start_col is not None
+                and select_end_col is not None
+                and select_start_col <= col < select_end_col
+            ):
+                style = style + Style(reverse=True)
 
             # Check if cursor is at this position
             if (
@@ -329,7 +352,7 @@ class TerminalView(Static):
                 and line_num == self._terminal_screen.cursor_y
                 and col == self._terminal_screen.cursor_x
             ):
-                # Invert colors for cursor
+                # Invert colors for cursor (applied after selection)
                 style = style + Style(reverse=True)
 
             text.append(char.data, style=style)
@@ -433,47 +456,162 @@ class TerminalView(Static):
         self.scroll_history_down(lines=3)
         event.stop()
 
-    # Text selection support methods
+    # Custom text selection implementation (performance-optimized)
+    # We use our own selection system instead of Textual's built-in one
+    # to properly clear selection when content changes (selection doesn't travel with text)
     @property
-    def allow_select(self) -> bool:
-        """Check if this widget permits text selection.
-
-        Always returns True for TerminalView to enable text selection.
+    def has_selection(self) -> bool:
+        """Check if there is an active selection.
 
         Returns:
-            True, indicating text selection is allowed.
+            True if there is a selection, False otherwise.
         """
-        return True
+        return self._selection_start is not None and self._selection_end is not None
 
-    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
-        """Get the text under the selection.
+    def _screen_to_terminal(self, x: int, y: int) -> tuple[int, int]:
+        """Convert screen coordinates to terminal (col, row).
 
-        Extracts text from the terminal screen based on the selection range.
-        The text is automatically copied to clipboard by Textual's selection
-        mechanism when the user presses Ctrl+C or when selection ends.
+        This is a direct calculation - no offset metadata needed.
 
         Args:
-            selection: Selection information containing start/end positions.
+            x: Screen X coordinate (relative to widget).
+            y: Screen Y coordinate (relative to widget).
 
         Returns:
-            Tuple of (extracted text, line ending) or None if no text.
+            Tuple of (col, row) clamped to terminal bounds.
         """
-        # Get all terminal content as a single string with newlines
+        col = max(0, min(x, self._terminal_screen.columns - 1))
+        row = max(0, min(y, self._terminal_screen.lines - 1))
+        return col, row
+
+    def _get_line_selection(self, line_num: int) -> tuple[int | None, int | None]:
+        """Get the selection range for a specific line.
+
+        Args:
+            line_num: The line number to check.
+
+        Returns:
+            Tuple of (start_col, end_col) or (None, None) if line not selected.
+        """
+        if self._selection_start is None or self._selection_end is None:
+            return None, None
+
+        start_col, start_row = self._selection_start
+        end_col, end_row = self._selection_end
+
+        # Normalize so start <= end
+        if (start_row, start_col) > (end_row, end_col):
+            start_col, start_row, end_col, end_row = end_col, end_row, start_col, start_row
+
+        # Check if this line is in the selection range
+        if line_num < start_row or line_num > end_row:
+            return None, None
+
+        # Calculate column range for this line
+        if line_num == start_row == end_row:
+            return start_col, end_col
+        elif line_num == start_row:
+            return start_col, self._terminal_screen.columns
+        elif line_num == end_row:
+            return 0, end_col
+        else:
+            return 0, self._terminal_screen.columns
+
+    def _get_selected_text(self) -> str:
+        """Extract the selected text from the terminal.
+
+        Returns:
+            The selected text as a string, or empty string if no selection.
+        """
+        if self._selection_start is None or self._selection_end is None:
+            return ""
+
+        start_col, start_row = self._selection_start
+        end_col, end_row = self._selection_end
+
+        # Normalize so start <= end
+        if (start_row, start_col) > (end_row, end_col):
+            start_col, start_row, end_col, end_row = end_col, end_row, start_col, start_row
+
         lines = []
-        for line_num in range(self._terminal_screen.lines):
-            styled_chars = self._terminal_screen.get_styled_line(line_num)
+        for row in range(start_row, end_row + 1):
+            styled_chars = self._terminal_screen.get_styled_line(row)
             line_text = "".join(char.data for char in styled_chars)
-            lines.append(line_text.rstrip())  # Strip trailing whitespace
 
-        text = "\n".join(lines)
-        return selection.extract(text), "\n"
+            if row == start_row == end_row:
+                lines.append(line_text[start_col:end_col])
+            elif row == start_row:
+                lines.append(line_text[start_col:].rstrip())
+            elif row == end_row:
+                lines.append(line_text[:end_col])
+            else:
+                lines.append(line_text.rstrip())
 
-    def selection_updated(self, _selection: Selection | None) -> None:
-        """Called when the selection is updated.
+        return "\n".join(lines)
 
-        Refreshes the widget display to show selection highlighting.
+    def _clear_selection(self) -> None:
+        """Clear the current selection."""
+        if self._selection_start is not None or self._selection_end is not None:
+            self._selection_start = None
+            self._selection_end = None
+            self._is_selecting = False
+            self._update_display()
+
+    # Mouse event handlers for text selection
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        """Start text selection on mouse down.
 
         Args:
-            _selection: Selection information or None if selection cleared.
+            event: The mouse down event.
         """
-        self._update_display()
+        if event.button == 1:  # Left button
+            # Convert screen coordinates to terminal coordinates
+            col, row = self._screen_to_terminal(event.x, event.y)
+            self._selection_start = (col, row)
+            self._selection_end = (col, row)
+            self._is_selecting = True
+            self.capture_mouse()
+            # Must use _update_display() to re-render with selection highlighting
+            self._update_display()
+            event.stop()
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        """Update selection during drag.
+
+        Args:
+            event: The mouse move event.
+        """
+        if self._is_selecting:
+            col, row = self._screen_to_terminal(event.x, event.y)
+            # Only update if selection actually changed
+            if self._selection_end != (col, row):
+                self._selection_end = (col, row)
+                # Must use _update_display() to re-render with selection highlighting
+                self._update_display()
+            event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        """End selection and copy to clipboard.
+
+        Args:
+            event: The mouse up event.
+        """
+        if self._is_selecting and event.button == 1:
+            self._is_selecting = False
+            self.release_mouse()
+
+            # Copy selected text to clipboard
+            selected_text = self._get_selected_text()
+            if selected_text and self.app:
+                self.app.copy_to_clipboard(selected_text)
+            event.stop()
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle key events.
+
+        Args:
+            event: The key event.
+        """
+        if event.key == "escape" and self.has_selection:
+            self._clear_selection()
+            event.stop()

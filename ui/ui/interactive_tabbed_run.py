@@ -303,6 +303,8 @@ class InteractiveTabbedApp(App[None]):
         Binding("f9", "retry_phase", "Retry", show=False),
         Binding("ctrl+s", "save_logs", "Save Logs", show=True),
         Binding("f10", "save_logs", "Save Logs", show=False),
+        Binding("ctrl+l", "copy_log", "Copy Log", show=True),
+        Binding("f11", "copy_log", "Copy Log", show=False),
         Binding("ctrl+h", "show_help", "Help", show=True),
     ]
 
@@ -1444,6 +1446,29 @@ class InteractiveTabbedApp(App[None]):
         log_path.write_text("\n".join(lines))
         return log_path
 
+    def action_copy_log(self) -> None:
+        """Copy the current tab's log to clipboard.
+
+        Copies the entire terminal output of the active tab to the system
+        clipboard. This is useful for quickly sharing or pasting logs.
+        """
+        if not self.active_pane:
+            self.notify("No active pane to copy log from", severity="warning")
+            return
+
+        if not self.active_pane.terminal_view:
+            self.notify("No terminal content to copy", severity="warning")
+            return
+
+        # Get the terminal display content
+        display = self.active_pane.terminal_view.terminal_display
+        # Strip trailing whitespace from each line and join
+        terminal_content = "\n".join(line.rstrip() for line in display)
+
+        # Copy to clipboard
+        self.copy_to_clipboard(terminal_content)
+        self.notify(f"Log copied to clipboard ({len(terminal_content)} chars)")
+
     def action_show_help(self) -> None:
         """Show help overlay with all keyboard shortcuts.
 
@@ -1462,6 +1487,7 @@ Phase Control:
   Ctrl+P / F8               - Toggle pause before next phase
   Ctrl+R / F9               - Retry failed phase
   Ctrl+S / F10              - Save logs to file
+  Ctrl+L / F11              - Copy log to clipboard
   Ctrl+H / F1               - Show this help
 
 Application:

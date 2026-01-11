@@ -100,6 +100,8 @@ DEFAULT_BINDINGS: dict[str, str] = {
     "retry_phase_alt": "f9",
     "save_logs": "ctrl+s",
     "save_logs_alt": "f10",
+    "copy_log": "ctrl+l",
+    "copy_log_alt": "f11",
     "show_help": "ctrl+h",
     # Note: F1 is already bound to "help" action above
 }
@@ -131,6 +133,8 @@ NAVIGATION_ACTIONS = frozenset(
         "retry_phase_alt",
         "save_logs",
         "save_logs_alt",
+        "copy_log",
+        "copy_log_alt",
         "show_help",
     }
 )

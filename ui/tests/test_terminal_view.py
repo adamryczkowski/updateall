@@ -355,3 +355,136 @@ class TestTerminalViewContentSize:
         # Size should update
         assert view.get_content_width(container, viewport) == 120
         assert view.get_content_height(container, viewport, 120) == 40
+
+
+class TestTerminalViewSelection:
+    """Tests for TerminalView text selection support.
+
+    These tests verify the custom mouse-based text selection implementation
+    that bypasses Textual's built-in selection system for better performance.
+    """
+
+    def test_screen_to_terminal_conversion_basic(self) -> None:
+        """Verify coordinate conversion works correctly for basic cases."""
+        view = TerminalView(columns=80, lines=24)
+
+        assert view._screen_to_terminal(0, 0) == (0, 0)
+        assert view._screen_to_terminal(10, 5) == (10, 5)
+        assert view._screen_to_terminal(79, 23) == (79, 23)
+
+    def test_screen_to_terminal_clamping(self) -> None:
+        """Verify coordinates are clamped to terminal bounds."""
+        view = TerminalView(columns=80, lines=24)
+
+        # Clamp to max bounds
+        assert view._screen_to_terminal(100, 30) == (79, 23)
+        # Clamp negative values
+        assert view._screen_to_terminal(-5, -3) == (0, 0)
+
+    def test_get_line_selection_no_selection(self) -> None:
+        """Test that no selection returns None values."""
+        view = TerminalView(columns=80, lines=24)
+
+        assert view._get_line_selection(0) == (None, None)
+        assert view._get_line_selection(5) == (None, None)
+
+    def test_get_line_selection_single_line(self) -> None:
+        """Test selection within a single line."""
+        view = TerminalView(columns=80, lines=24)
+        view._selection_start = (5, 0)
+        view._selection_end = (10, 0)
+
+        assert view._get_line_selection(0) == (5, 10)
+        assert view._get_line_selection(1) == (None, None)
+
+    def test_get_line_selection_single_line_reversed(self) -> None:
+        """Test selection within a single line with reversed start/end."""
+        view = TerminalView(columns=80, lines=24)
+        view._selection_start = (10, 0)
+        view._selection_end = (5, 0)
+
+        # Should normalize to (5, 10)
+        assert view._get_line_selection(0) == (5, 10)
+
+    def test_get_line_selection_multi_line(self) -> None:
+        """Test selection spanning multiple lines."""
+        view = TerminalView(columns=80, lines=24)
+        view._selection_start = (5, 1)
+        view._selection_end = (10, 3)
+
+        assert view._get_line_selection(0) == (None, None)
+        assert view._get_line_selection(1) == (5, 80)  # First line: from start to end
+        assert view._get_line_selection(2) == (0, 80)  # Middle line: full line
+        assert view._get_line_selection(3) == (0, 10)  # Last line: from start to end
+        assert view._get_line_selection(4) == (None, None)
+
+    def test_get_line_selection_multi_line_reversed(self) -> None:
+        """Test multi-line selection with reversed start/end."""
+        view = TerminalView(columns=80, lines=24)
+        view._selection_start = (10, 3)
+        view._selection_end = (5, 1)
+
+        # Should normalize and work the same
+        assert view._get_line_selection(1) == (5, 80)
+        assert view._get_line_selection(2) == (0, 80)
+        assert view._get_line_selection(3) == (0, 10)
+
+    def test_get_selected_text_no_selection(self) -> None:
+        """Test that no selection returns empty string."""
+        view = TerminalView(columns=80, lines=24)
+        view.feed(b"Hello, World!")
+
+        assert view._get_selected_text() == ""
+
+    def test_get_selected_text_single_line(self) -> None:
+        """Test text extraction from single-line selection."""
+        view = TerminalView(columns=80, lines=24)
+        view.feed(b"Hello, World!")
+        view._selection_start = (7, 0)
+        view._selection_end = (12, 0)
+
+        assert view._get_selected_text() == "World"
+
+    def test_get_selected_text_multi_line(self) -> None:
+        """Test text extraction from multi-line selection."""
+        view = TerminalView(columns=80, lines=24)
+        view.feed(b"Line 1\r\nLine 2\r\nLine 3")
+        view._selection_start = (0, 0)
+        view._selection_end = (6, 2)
+
+        result = view._get_selected_text()
+        assert "Line 1" in result
+        assert "Line 2" in result
+        assert "Line 3" in result
+
+    def test_clear_selection(self) -> None:
+        """Test selection clearing."""
+        view = TerminalView(columns=80, lines=24)
+        view._selection_start = (0, 0)
+        view._selection_end = (10, 0)
+        view._is_selecting = True
+
+        view._clear_selection()
+
+        assert view._selection_start is None
+        assert view._selection_end is None
+        assert view._is_selecting is False
+
+    def test_initial_selection_state(self) -> None:
+        """Test that selection state is initially None/False."""
+        view = TerminalView(columns=80, lines=24)
+
+        assert view._selection_start is None
+        assert view._selection_end is None
+        assert view._is_selecting is False
+
+    def test_has_selection_property(self) -> None:
+        """Test the has_selection property."""
+        view = TerminalView(columns=80, lines=24)
+
+        assert view.has_selection is False
+
+        view._selection_start = (0, 0)
+        view._selection_end = (10, 0)
+
+        assert view.has_selection is True

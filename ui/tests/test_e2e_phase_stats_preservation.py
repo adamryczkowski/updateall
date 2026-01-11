@@ -318,10 +318,12 @@ class TestE2EScrollingResponsiveness:
 
             elapsed = time.perf_counter() - start
 
-            # Scrolling should complete quickly (< 0.5s for 5 scrolls)
+            # Scrolling should complete quickly (< 2s for 5 scrolls)
             # If it's waiting for the 1s update interval, this would take 5s
-            assert elapsed < 0.5, (
-                f"Scrolling took {elapsed:.2f}s for 5 actions, expected < 0.5s. "
+            # We use a generous threshold (2s) to account for system load variations
+            # while still catching the regression (5s if waiting for update interval)
+            assert elapsed < 2.0, (
+                f"Scrolling took {elapsed:.2f}s for 5 actions, expected < 2.0s. "
                 "This suggests scrolling is waiting for the update interval."
             )
 

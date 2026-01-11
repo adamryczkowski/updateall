@@ -1,6 +1,6 @@
 [project]
 name = "update-all-plugins"
-version = "0.9.0"
+version = "0.9.1"
 description = "Plugin implementations for update-all system (apt, pipx, flatpak, etc.)"
 readme = "README.adoc"
 requires-python = ">=3.11"
@@ -39,7 +39,7 @@ aiohttp = "^3.13.3"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 pytest-cov = "^6.0"
-pytest-asyncio = "^0.25"
+pytest-asyncio = "^1.3.0"
 mypy = "^1.14"
 ruff = "^0.14"
 

@@ -617,33 +617,44 @@ docs/
 
 **Goal:** Ensure consistency across all modules.
 
+**Status:** ✅ COMPLETE (January 10, 2025)
+
 **Estimated Effort:** 1-2 days
+**Actual Effort:** < 0.5 day
 
 ### 9.1 Code Style Consistency
 
-- [ ] Ensure all modules use consistent import ordering
-- [ ] Verify docstring format is consistent (Google style)
-- [ ] Check type hints are complete and consistent
-- [ ] Verify logging patterns are consistent
+- [x] Ensure all modules use consistent import ordering - **verified via ruff isort**
+- [x] Verify docstring format is consistent (Google style) - **verified**
+- [x] Check type hints are complete and consistent - **verified via mypy strict mode**
+- [x] Verify logging patterns are consistent - **all modules use `logger = structlog.get_logger(__name__)`**
 
 ### 9.2 Configuration Consistency
 
-- [ ] Review `pyproject.toml` files for consistency
-- [ ] Ensure all subprojects use same Python version requirement
-- [ ] Verify dependency versions are compatible
-- [ ] Check `justfile` patterns are consistent
+- [x] Review `pyproject.toml` files for consistency
+- [x] Ensure all subprojects use same Python version requirement - **all use `^3.11`**
+- [x] Verify dependency versions are compatible - **standardized pytest-asyncio to `^1.3.0`**
+- [x] Check `justfile` patterns are consistent - **all use common import**
+
+**Changes Made:**
+- Standardized `pytest-asyncio` version to `^1.3.0` across all subprojects (was inconsistent: core/cli/plugins had `^0.25`, ui had `^1.3.0`, stats was missing)
+- Added `pytest-asyncio = "^1.3.0"` to stats/pyproject.toml (was missing)
+- Added `asyncio_mode = "auto"` to ui/pyproject.toml and stats/pyproject.toml (was missing)
 
 ### 9.3 Error Handling Consistency
 
-- [ ] Review exception classes across modules
-- [ ] Ensure consistent error message format
-- [ ] Verify logging levels are appropriate
+- [x] Review exception classes across modules - **19 exception classes, well-organized**
+- [x] Ensure consistent error message format - **verified**
+- [x] Verify logging levels are appropriate - **verified**
+
+**Changes Made:**
+- Renamed `DownloadError` to `PluginDownloadError` in `plugins/repository.py` to avoid naming conflict with `core.download_manager.DownloadError`
 
 ### 9.4 Validation
 
-- [ ] `just validate` passes
-- [ ] `pre-commit run --all-files` passes
-- [ ] No new linting warnings
+- [x] `just validate` passes
+- [x] `pre-commit run --all-files` passes
+- [x] No new linting warnings
 
 ---
 
@@ -736,3 +747,4 @@ stats
 | 1.5 | 2025-01-10 | AI Assistant | Milestone 6 completed - plugins module cleanup, mock plugins moved to mocks/ subpackage |
 | 1.6 | 2025-01-10 | AI Assistant | Milestone 7 completed - test suite rationalization, created test_regression_bugs.py |
 | 1.7 | 2025-01-10 | AI Assistant | Milestone 8 completed - documentation consolidation, created docs/README.md, archived 5 completed plans, updated bug-investigation-report.md |
+| 1.8 | 2025-01-10 | AI Assistant | Milestone 9 completed - cross-module consistency, standardized pytest-asyncio versions, added asyncio_mode settings, renamed PluginDownloadError |

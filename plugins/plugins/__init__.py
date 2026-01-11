@@ -55,9 +55,9 @@ from plugins.poetry import PoetryPlugin
 from plugins.r import RPlugin
 from plugins.registry import PluginRegistry, get_registry
 from plugins.repository import (
-    DownloadError,
     InstallationError,
     InstalledPlugin,
+    PluginDownloadError,
     PluginInfo,
     PluginNotFoundError,
     PluginRepository,
@@ -94,7 +94,6 @@ __all__ = [
     "CondaCleanPlugin",
     "CondaPackagesPlugin",
     "CondaSelfPlugin",
-    "DownloadError",
     "FlatpakPlugin",
     "FootPlugin",
     "GoPackagesPlugin",
@@ -110,6 +109,7 @@ __all__ = [
     "PiholePlugin",
     "PipPlugin",
     "PipxPlugin",
+    "PluginDownloadError",
     "PluginInfo",
     "PluginNotFoundError",
     "PluginRegistry",

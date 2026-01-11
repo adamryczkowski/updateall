@@ -35,8 +35,8 @@ class PluginNotFoundError(RepositoryError):
     """Plugin not found in repository."""
 
 
-class DownloadError(RepositoryError):
-    """Failed to download plugin."""
+class PluginDownloadError(RepositoryError):
+    """Failed to download plugin from repository."""
 
 
 class InstallationError(RepositoryError):
@@ -444,7 +444,7 @@ class PluginRepository:
 
         Raises:
             PluginNotFoundError: If plugin not found.
-            DownloadError: If download fails.
+            PluginDownloadError: If download fails.
             InstallationError: If installation fails.
         """
         log = logger.bind(plugin=plugin_name)
@@ -527,17 +527,17 @@ class PluginRepository:
             Path to downloaded plugin.
         """
         if not info.download_url:
-            raise DownloadError(f"No download URL for plugin '{info.name}'")
+            raise PluginDownloadError(f"No download URL for plugin '{info.name}'")
 
         # For file:// URLs (local testing)
         if info.download_url.startswith("file://"):
             path = Path(info.download_url[7:])
             if not path.exists():
-                raise DownloadError(f"Plugin file not found: {path}")
+                raise PluginDownloadError(f"Plugin file not found: {path}")
             return path
 
         # HTTP support would require httpx
-        raise DownloadError(f"HTTP downloads not yet supported: {info.download_url}")
+        raise PluginDownloadError(f"HTTP downloads not yet supported: {info.download_url}")
 
     def uninstall(self, plugin_name: str) -> bool:
         """Uninstall a plugin.

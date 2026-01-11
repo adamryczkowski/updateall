@@ -74,6 +74,13 @@ class PaneConfig:
     show_phase_status_bar: bool = True
     metrics_update_interval: float = 1.0
 
+    # UI refresh rate in Hz (default: 30 Hz)
+    # This controls how often the status bar reads cached metrics and updates
+    # the display. The actual metrics collection (psutil) happens at
+    # metrics_update_interval (default: 1.0s). This decoupling allows smooth
+    # UI updates (30 Hz) while expensive psutil calls happen less frequently.
+    ui_refresh_rate: float = 30.0
+
 
 class PaneOutputMessage(Message):
     """Message sent when a pane produces output."""
@@ -370,10 +377,12 @@ class TerminalPane(Container):
         yield self._terminal_view
 
         # Phase 3: Add phase status bar with metrics if enabled
+        # Pass ui_refresh_rate to enable high-frequency UI updates
         if self.config.show_phase_status_bar:
             self._phase_status_bar = PhaseStatusBar(
                 pane_id=self.pane_id,
                 id=f"phase-status-{self.pane_id}",
+                ui_refresh_rate=self.config.ui_refresh_rate,
             )
             yield self._phase_status_bar
 
@@ -635,24 +644,28 @@ class TerminalPane(Container):
                 self._status_bar.status_message = f"Exit code: {self._exit_code}"
 
     async def _metrics_update_loop(self) -> None:
-        """Background task to periodically update metrics display.
+        """Background task to periodically collect metrics.
 
-        This task runs while the PTY session is active and updates the
-        phase status bar with current metrics at regular intervals.
+        This task runs while the PTY session is active and collects
+        metrics at regular intervals (default: 1 Hz). The collected
+        metrics are cached in the MetricsCollector for fast reads.
+
+        The UI update is now decoupled from metrics collection:
+        - This loop: Collects metrics at 1 Hz (expensive psutil calls)
+        - PhaseStatusBar.automatic_refresh(): Updates UI at 30 Hz (reads cache)
 
         The metrics collection is run in a separate thread using
         asyncio.to_thread() to ensure it continues to run even when
-        the main event loop is busy with CPU-bound work. This fixes
-        the issue where CPU statistics would not update during
-        CPU-intensive operations.
+        the main event loop is busy with CPU-bound work.
         """
         try:
             while self._state == PaneState.RUNNING:
-                if self._metrics_collector and self._phase_status_bar:
+                if self._metrics_collector:
                     # Run metrics collection in a thread to avoid blocking
                     # the event loop and ensure updates continue during
-                    # CPU-bound operations
-                    await asyncio.to_thread(self._collect_metrics_sync)
+                    # CPU-bound operations. The collected metrics are cached
+                    # and will be read by PhaseStatusBar.automatic_refresh()
+                    await asyncio.to_thread(self._collect_metrics_only)
                 await asyncio.sleep(self.config.metrics_update_interval)
         except asyncio.CancelledError:
             pass
@@ -666,9 +679,23 @@ class TerminalPane(Container):
                 }
                 final_status = status_map.get(self._state, "Stopped")
                 self._metrics_collector.update_status(final_status)
-                if self._phase_status_bar:
-                    # Final update also in thread for consistency
-                    await asyncio.to_thread(self._collect_metrics_sync)
+                # Final collection to update cache with final status
+                await asyncio.to_thread(self._collect_metrics_only)
+
+    def _collect_metrics_only(self) -> None:
+        """Synchronously collect metrics without updating the UI.
+
+        This method collects metrics using psutil and caches them
+        in the MetricsCollector. The UI reads from this cache at
+        a higher frequency via PhaseStatusBar.automatic_refresh().
+
+        This method is designed to be called from a thread via
+        asyncio.to_thread() to ensure metrics collection doesn't
+        block the event loop.
+        """
+        if self._metrics_collector:
+            # Just collect - this updates _metrics and _cached_metrics
+            self._metrics_collector.collect()
 
     def _collect_metrics_sync(self) -> None:
         """Synchronously collect metrics and update the status bar.
@@ -676,6 +703,10 @@ class TerminalPane(Container):
         This method is designed to be called from a thread via
         asyncio.to_thread() to ensure metrics collection doesn't
         block the event loop.
+
+        Note: This method is kept for backward compatibility but
+        is no longer used in the main metrics loop. The UI now
+        updates via PhaseStatusBar.automatic_refresh().
         """
         if self._phase_status_bar:
             self._phase_status_bar.collect_and_update()

@@ -107,6 +107,12 @@ class PhaseStatusBar(Static):
 
     DEFAULT_CSS = PHASE_STATUS_BAR_CSS
 
+    # Default UI refresh rate in Hz (30 Hz = ~33ms between refreshes)
+    # This is the rate at which the UI reads cached metrics and updates display.
+    # The actual metrics collection (psutil) happens at a lower frequency (1 Hz)
+    # in a background thread to avoid blocking the UI.
+    DEFAULT_UI_REFRESH_RATE: float = 30.0
+
     # Reactive properties for automatic refresh
     metrics: reactive[PhaseMetrics] = reactive(PhaseMetrics, always_update=True)
 
@@ -117,6 +123,7 @@ class PhaseStatusBar(Static):
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
+        ui_refresh_rate: float | None = None,
     ) -> None:
         """Initialize the status bar.
 
@@ -125,10 +132,43 @@ class PhaseStatusBar(Static):
             name: Widget name.
             id: Widget ID.
             classes: CSS classes.
+            ui_refresh_rate: UI refresh rate in Hz (default: 30.0).
+                This controls how often the status bar reads cached metrics
+                and updates the display. The actual metrics collection
+                happens at a lower frequency in a background thread.
         """
         super().__init__(name=name, id=id or f"status-bar-{pane_id}", classes=classes)
         self.pane_id = pane_id
         self._metrics_collector: MetricsCollector | None = None
+        self._ui_refresh_rate = ui_refresh_rate or self.DEFAULT_UI_REFRESH_RATE
+
+    def on_mount(self) -> None:
+        """Called when the widget is mounted to the DOM.
+
+        Sets up auto_refresh to enable high-frequency UI updates.
+        The auto_refresh property tells Textual to call automatic_refresh()
+        at the specified interval, allowing the status bar to update
+        smoothly without waiting for metrics collection.
+        """
+        # Set auto_refresh to trigger at the configured UI refresh rate
+        # This is 1/rate seconds (e.g., 1/30 = 0.033s for 30 Hz)
+        self.auto_refresh = 1.0 / self._ui_refresh_rate
+
+    def automatic_refresh(self) -> None:
+        """Called automatically by Textual at the auto_refresh interval.
+
+        This method reads cached metrics from the collector (fast, no psutil)
+        and updates the display. The actual metrics collection happens in
+        a background thread at a lower frequency (1 Hz).
+
+        This decouples UI refresh rate from metrics collection rate,
+        allowing smooth 30 Hz UI updates while expensive psutil calls
+        happen only once per second.
+        """
+        if self._metrics_collector:
+            # Read cached metrics (fast, no psutil call)
+            self.metrics = self._metrics_collector.cached_metrics
+        # Note: _refresh_display() is called automatically via watch_metrics
 
     def watch_metrics(self, metrics: PhaseMetrics) -> None:
         """React to metrics changes.

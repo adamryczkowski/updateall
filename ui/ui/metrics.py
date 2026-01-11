@@ -476,6 +476,7 @@ class MetricsCollector:
         self._peak_memory_mb: float = 0.0
         self._last_update: datetime | None = None
         self._metrics = PhaseMetrics()
+        self._cached_metrics = PhaseMetrics()  # Cached copy for fast UI reads
         self._running = False
         self._update_task: asyncio.Task[None] | None = None
 
@@ -505,6 +506,20 @@ class MetricsCollector:
     def metrics(self) -> PhaseMetrics:
         """Get the current metrics."""
         return self._metrics
+
+    @property
+    def cached_metrics(self) -> PhaseMetrics:
+        """Get the cached metrics for fast UI reads.
+
+        This property returns the most recently collected metrics without
+        triggering a new collection. It's designed for high-frequency UI
+        reads (e.g., 30 Hz) where the actual collection happens at a lower
+        frequency (e.g., 1 Hz) in a background thread.
+
+        Returns:
+            The cached PhaseMetrics from the last collection.
+        """
+        return self._cached_metrics
 
     @property
     def phase_stats(self) -> dict[str, PhaseStats]:
@@ -909,7 +924,39 @@ class MetricsCollector:
         except Exception as e:
             self._metrics.error_message = str(e)
 
+        # Update the cached metrics for fast UI reads
+        # This allows the UI to read at high frequency (30 Hz) while
+        # actual collection happens at lower frequency (1 Hz)
+        self._update_cached_metrics()
+
         return self._metrics
+
+    def _update_cached_metrics(self) -> None:
+        """Update the cached metrics from the current metrics.
+
+        This method copies all fields from _metrics to _cached_metrics.
+        The cached metrics are used by the UI for high-frequency reads
+        without triggering expensive psutil collection.
+        """
+        m = self._metrics
+        c = self._cached_metrics
+        c.status = m.status
+        c.pause_after_phase = m.pause_after_phase
+        c.eta_seconds = m.eta_seconds
+        c.eta_error_seconds = m.eta_error_seconds
+        c.cpu_percent = m.cpu_percent
+        c.memory_mb = m.memory_mb
+        c.memory_peak_mb = m.memory_peak_mb
+        c.items_completed = m.items_completed
+        c.items_total = m.items_total
+        c.network_bytes = m.network_bytes
+        c.disk_io_bytes = m.disk_io_bytes
+        c.cpu_time_seconds = m.cpu_time_seconds
+        c.projected_download_bytes = m.projected_download_bytes
+        c.projected_upgrade_bytes = m.projected_upgrade_bytes
+        c.actual_download_bytes = m.actual_download_bytes
+        c.actual_upgrade_bytes = m.actual_upgrade_bytes
+        c.error_message = m.error_message
 
     def update_progress(self, completed: int, total: int | None = None) -> None:
         """Update progress metrics.

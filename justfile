@@ -164,3 +164,8 @@ install:
     # Install the CLI package from the local cli directory
     pipx install ./cli --force
     echo "Installation complete. Run 'update-all --help' to verify."
+
+# Measure UI latency with mock plugins
+# See docs/ui-latency-planning.md Milestone 3
+measure-latency *args:
+    cd ui && poetry run python ../scripts/measure_ui_latency.py {{ args }}

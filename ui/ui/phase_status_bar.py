@@ -24,6 +24,8 @@ PhaseStatusBar widget for displaying metrics.
 
 from __future__ import annotations
 
+import logging
+
 from textual.reactive import reactive
 from textual.widgets import Static
 
@@ -33,6 +35,10 @@ from ui.metrics import (
     PhaseStats,
     RunningProgress,
 )
+
+# Logger for UI latency debugging
+# Enable with: logging.getLogger("ui.latency").setLevel(logging.DEBUG)
+_latency_logger = logging.getLogger("ui.latency")
 
 # CSS styles for the phase status bar (5 lines)
 PHASE_STATUS_BAR_CSS = """
@@ -168,6 +174,11 @@ class PhaseStatusBar(Static):
         if self._metrics_collector:
             # Read cached metrics (fast, no psutil call)
             self.metrics = self._metrics_collector.cached_metrics
+            _latency_logger.debug(
+                "UI refresh for pane %s (rate: %.1f Hz)",
+                self.pane_id,
+                self._ui_refresh_rate,
+            )
         # Note: _refresh_display() is called automatically via watch_metrics
 
     def watch_metrics(self, metrics: PhaseMetrics) -> None:

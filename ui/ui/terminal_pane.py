@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -40,6 +41,10 @@ if TYPE_CHECKING:
     from textual.app import ComposeResult
 
     from core.interfaces import UpdatePlugin
+
+# Logger for UI latency debugging
+# Enable with: logging.getLogger("ui.latency").setLevel(logging.DEBUG)
+_latency_logger = logging.getLogger("ui.latency")
 
 
 class PaneState(str, Enum):
@@ -696,6 +701,11 @@ class TerminalPane(Container):
         if self._metrics_collector:
             # Just collect - this updates _metrics and _cached_metrics
             self._metrics_collector.collect()
+            _latency_logger.debug(
+                "Metrics collected for pane %s (interval: %.1fs)",
+                self.pane_id,
+                self.config.metrics_update_interval,
+            )
 
     def _collect_metrics_sync(self) -> None:
         """Synchronously collect metrics and update the status bar.
@@ -725,6 +735,11 @@ class TerminalPane(Container):
         This method allows external components (like PhaseController) to
         update metrics that cannot be collected automatically.
 
+        Note: This method updates the metrics in the collector but does NOT
+        trigger an immediate UI refresh. The UI will be updated on the next
+        automatic_refresh() cycle (at 30 Hz). This decoupling ensures that
+        expensive psutil calls are not triggered by external metric updates.
+
         Args:
             eta_seconds: Estimated time remaining in seconds.
             eta_error_seconds: Error margin for ETA in seconds.
@@ -747,9 +762,10 @@ class TerminalPane(Container):
         if pause_after_phase is not None:
             self._metrics_collector._metrics.pause_after_phase = pause_after_phase
 
-        # Trigger immediate update
-        if self._phase_status_bar:
-            self._phase_status_bar.collect_and_update()
+        # Update the cached metrics so the UI sees the changes on next refresh
+        # This does NOT trigger a psutil collection - it just copies the
+        # already-updated _metrics to _cached_metrics for UI reads
+        self._metrics_collector._update_cached_metrics()
 
     async def process_key(self, key: str) -> bool:
         """Process a key press and route it to the PTY.

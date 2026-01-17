@@ -183,6 +183,10 @@ def get_all_plugins() -> list[UpdatePlugin]:
     return registry.get_all()
 
 
+# Get a logger for step summaries
+log = structlog.get_logger()
+
+
 async def run_plugin_steps(
     plugin: UpdatePlugin,
     dry_run: bool = False,
@@ -311,12 +315,25 @@ async def run_plugin_steps(
 
                 # Detect step headers (e.g., "=== [1/2] Update package lists ===")
                 if line.startswith("===") and line.endswith("==="):
-                    # If we have a previous step, show its summary
+                    # If we have a previous step, log its summary via structlog
                     if current_step_header and current_step_lines:
                         summary = parse_step_summary(current_step_lines)
-                        summary_text = format_step_summary(summary)
-                        if summary_text:
-                            click.echo(f"  → {summary_text}")
+                        # Log step summary with structured fields
+                        log_kwargs: dict[str, str | int | None] = {
+                            "plugin": name,
+                            "step": current_step_header.strip("= "),
+                        }
+                        if summary.get("packages_to_update") is not None:
+                            log_kwargs["packages_to_update"] = summary["packages_to_update"]
+                        if summary.get("download_size"):
+                            log_kwargs["download_size"] = summary["download_size"]
+                        if summary.get("packages_upgraded") is not None:
+                            log_kwargs["packages_upgraded"] = summary["packages_upgraded"]
+                        if summary.get("packages_installed") is not None:
+                            log_kwargs["packages_installed"] = summary["packages_installed"]
+                        # Only log if we have meaningful info
+                        if len(log_kwargs) > 2:  # More than just plugin and step
+                            log.info("step_completed", **log_kwargs)
 
                     # Start tracking new step
                     current_step_header = line
@@ -346,12 +363,25 @@ async def run_plugin_steps(
                         status = "✓" if event.success else "✗"
                         click.echo(f"  [Phase: {event.phase.value} {status}]")
             elif isinstance(event, CompletionEvent):
-                # Show summary for the last step before completion
+                # Log summary for the last step before completion
                 if current_step_lines:
                     summary = parse_step_summary(current_step_lines)
-                    summary_text = format_step_summary(summary)
-                    if summary_text:
-                        click.echo(f"  → {summary_text}")
+                    # Log step summary with structured fields
+                    log_kwargs: dict[str, str | int | None] = {
+                        "plugin": name,
+                        "step": current_step_header.strip("= ") if current_step_header else "final",
+                    }
+                    if summary.get("packages_to_update") is not None:
+                        log_kwargs["packages_to_update"] = summary["packages_to_update"]
+                    if summary.get("download_size"):
+                        log_kwargs["download_size"] = summary["download_size"]
+                    if summary.get("packages_upgraded") is not None:
+                        log_kwargs["packages_upgraded"] = summary["packages_upgraded"]
+                    if summary.get("packages_installed") is not None:
+                        log_kwargs["packages_installed"] = summary["packages_installed"]
+                    # Only log if we have meaningful info
+                    if len(log_kwargs) > 2:  # More than just plugin and step
+                        log.info("step_completed", **log_kwargs)
 
                 # Track final status
                 final_success = event.success

@@ -23,13 +23,135 @@ Environment Variables:
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import sys
 from typing import TYPE_CHECKING
 
 import click
+import structlog
 
 if TYPE_CHECKING:
     from core.interfaces import UpdatePlugin
+
+
+def configure_logging(log_level: str) -> None:
+    """Configure structlog and standard logging with the specified level.
+
+    Args:
+        log_level: Log level string (debug, info, warning, error).
+    """
+    # Map string to logging level
+    level_map = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+    }
+    level = level_map.get(log_level.lower(), logging.INFO)
+
+    # Configure standard logging
+    logging.basicConfig(
+        format="%(message)s",
+        level=level,
+        force=True,  # Override any existing configuration
+    )
+
+    # Configure structlog to filter by level
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.dev.ConsoleRenderer(),
+        ],
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+
+def parse_step_summary(lines: list[str]) -> dict[str, str | int | None]:
+    """Parse output lines from a step to extract summary information.
+
+    Looks for patterns like:
+    - "X package(s) can be upgraded" - package count
+    - "Need to get X MB" - download size
+    - "X upgraded, Y newly installed" - upgrade summary
+
+    Args:
+        lines: Output lines from a command step.
+
+    Returns:
+        Dict with extracted info: packages_to_update, download_size, etc.
+    """
+    result: dict[str, str | int | None] = {
+        "packages_to_update": None,
+        "download_size": None,
+        "packages_upgraded": None,
+        "packages_installed": None,
+    }
+
+    for line in lines:
+        # Match "X package can be upgraded" or "X packages can be upgraded"
+        match = re.search(r"(\d+)\s+packages?\s+can\s+be\s+upgraded", line)
+        if match:
+            result["packages_to_update"] = int(match.group(1))
+            continue
+
+        # Match "Need to get X MB of archives" or "Need to get X kB"
+        match = re.search(r"Need\s+to\s+get\s+([\d.,]+)\s*([kMG]?B)", line)
+        if match:
+            size = match.group(1).replace(",", "")
+            unit = match.group(2)
+            result["download_size"] = f"{size} {unit}"
+            continue
+
+        # Match "X upgraded, Y newly installed, Z to remove"
+        match = re.search(r"(\d+)\s+upgraded,\s+(\d+)\s+newly\s+installed", line)
+        if match:
+            result["packages_upgraded"] = int(match.group(1))
+            result["packages_installed"] = int(match.group(2))
+            continue
+
+        # Match "0 upgraded, 0 newly installed" (already up to date)
+        match = re.search(r"(\d+)\s+upgraded", line)
+        if match and result["packages_upgraded"] is None:
+            result["packages_upgraded"] = int(match.group(1))
+
+    return result
+
+
+def format_step_summary(summary: dict[str, str | int | None]) -> str | None:
+    """Format the step summary for display.
+
+    Args:
+        summary: Dict with extracted info from parse_step_summary.
+
+    Returns:
+        Formatted summary string, or None if no relevant info.
+    """
+    parts = []
+
+    if summary.get("packages_to_update") is not None:
+        count = summary["packages_to_update"]
+        parts.append(f"{count} package(s) to update")
+
+    if summary.get("download_size"):
+        parts.append(f"download size: {summary['download_size']}")
+
+    if summary.get("packages_upgraded") is not None:
+        upgraded = summary["packages_upgraded"]
+        installed = summary.get("packages_installed", 0) or 0
+        if upgraded > 0 or installed > 0:
+            parts.append(f"{upgraded} upgraded, {installed} newly installed")
+
+    if parts:
+        return " | ".join(parts)
+    return None
 
 
 def get_plugin(name: str) -> UpdatePlugin | None:
@@ -179,10 +301,33 @@ async def run_plugin_steps(
         final_packages = 0
         final_error: str | None = None
 
+        # Track output lines per step for summary extraction
+        current_step_lines: list[str] = []
+        current_step_header: str | None = None
+
         async for event in plugin.execute_streaming(dry_run=dry_run):
             if isinstance(event, OutputEvent):
+                line = event.line
+
+                # Detect step headers (e.g., "=== [1/2] Update package lists ===")
+                if line.startswith("===") and line.endswith("==="):
+                    # If we have a previous step, show its summary
+                    if current_step_header and current_step_lines:
+                        summary = parse_step_summary(current_step_lines)
+                        summary_text = format_step_summary(summary)
+                        if summary_text:
+                            click.echo(f"  → {summary_text}")
+
+                    # Start tracking new step
+                    current_step_header = line
+                    current_step_lines = []
+
+                # Collect lines for current step
+                current_step_lines.append(line)
+
                 # Print output lines in real-time
-                click.echo(f"  {event.line}")
+                click.echo(f"  {line}")
+
             elif isinstance(event, ProgressEvent):
                 # Show progress updates
                 if event.percent is not None:
@@ -201,6 +346,13 @@ async def run_plugin_steps(
                         status = "✓" if event.success else "✗"
                         click.echo(f"  [Phase: {event.phase.value} {status}]")
             elif isinstance(event, CompletionEvent):
+                # Show summary for the last step before completion
+                if current_step_lines:
+                    summary = parse_step_summary(current_step_lines)
+                    summary_text = format_step_summary(summary)
+                    if summary_text:
+                        click.echo(f"  → {summary_text}")
+
                 # Track final status
                 final_success = event.success
                 final_packages = event.packages_updated
@@ -230,6 +382,13 @@ async def run_plugin_steps(
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output showing all steps")
 @click.option("--list", "-l", "list_plugins", is_flag=True, help="List available plugins")
 @click.option(
+    "--log-level",
+    "-L",
+    type=click.Choice(["debug", "info", "warning", "error"], case_sensitive=False),
+    default="info",
+    help="Set log level for structlog output (default: info)",
+)
+@click.option(
     "--continue-on-error/--stop-on-error",
     "-c/-x",
     default=True,
@@ -242,6 +401,7 @@ def main(
     skip_download: bool,
     verbose: bool,
     list_plugins: bool,
+    log_level: str,
     continue_on_error: bool,
 ) -> None:
     """Run update plugins directly without orchestrator overhead.
@@ -260,7 +420,11 @@ def main(
         update-simple --all
         update-simple mock-alpha --dry-run --verbose
         update-simple --list
+        update-simple apt --log-level warning  # Suppress debug/info logs
     """
+    # Configure logging before any plugin operations
+    configure_logging(log_level)
+
     if list_plugins:
         all_plugins = get_all_plugins()
         click.echo("Available plugins:")

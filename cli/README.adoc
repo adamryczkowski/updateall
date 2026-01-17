@@ -24,6 +24,8 @@ poetry install
 
 == Usage
 
+=== Standard Mode (update-all)
+
 [source,bash]
 ----
 # Run all updates
@@ -43,6 +45,39 @@ update-all history
 
 # Show help
 update-all --help
+----
+
+=== Simple Mode (update-simple)
+
+A lightweight CLI that runs plugins directly without the orchestrator, using the 4-step plugin API:
+
+1. `check_available()` - Does plugin apply to this system?
+2. `check_updates()` - Are updates available?
+3. `download()` - Download updates (if supported separately)
+4. `execute()` - Apply updates
+
+[source,bash]
+----
+# List available plugins
+update-simple --list
+
+# Run specific plugins in sequence
+update-simple apt pipx flatpak
+
+# Run all available plugins
+update-simple --all
+
+# Dry run with verbose output
+update-simple apt --dry-run --verbose
+
+# Skip separate download phase
+update-simple apt --skip-download
+
+# Stop on first error (default: continue)
+update-simple --all --stop-on-error
+
+# Show help
+update-simple --help
 ----
 
 == Development

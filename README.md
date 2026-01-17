@@ -190,10 +190,11 @@ plugins:
 
 | Command | Description |
 |---------|-------------|
-| `update-all run` | Run system updates |
+| `update-all run` | Run system updates with orchestrator and UI |
 | `update-all check` | Check for available updates |
 | `update-all status` | Show system and plugin status |
 | `update-all history` | Show update history |
+| `update-simple` | Run plugins directly without orchestrator (simple mode) |
 
 ### Plugin Commands
 
@@ -250,6 +251,38 @@ update-all run
 # Update only user-space package managers (no sudo required)
 update-all run --plugin pipx --plugin flatpak --plugin cargo
 ```
+
+### Simple Mode (update-simple)
+
+For users who prefer a simpler, shell-script-like experience without the orchestrator overhead, use `update-simple`:
+
+```bash
+# List available plugins
+update-simple --list
+
+# Run specific plugins in sequence
+update-simple apt pipx flatpak
+
+# Run all available plugins
+update-simple --all
+
+# Dry run with verbose output showing all 4 steps
+update-simple apt --dry-run --verbose
+
+# Skip the separate download phase
+update-simple apt --skip-download
+```
+
+The `update-simple` command runs each plugin through 4 steps:
+1. **check_available()** — Does plugin apply to this system?
+2. **check_updates()** — Are updates available?
+3. **download()** — Download updates (if supported separately)
+4. **execute()** — Apply updates
+
+This is ideal for:
+- Debugging individual plugins
+- Scripting custom update sequences
+- Users who prefer explicit control over execution order
 
 ### Scheduled Updates (Coming Soon)
 

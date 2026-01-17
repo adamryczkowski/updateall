@@ -1,6 +1,6 @@
 [project]
 name = "update-all-cli"
-version = "0.6.0"
+version = "0.7.0"
 description = "Command-line interface for update-all system"
 readme = "README.adoc"
 requires-python = ">=3.11"
@@ -25,6 +25,7 @@ classifiers = [
 
 [project.scripts]
 update-all = "cli.main:app"
+update-simple = "cli.simple:main"
 
 [project.urls]
 Homepage = "https://github.com/update-all/update-all"
@@ -37,6 +38,7 @@ packages = [{ include = "cli" }]
 [tool.poetry.dependencies]
 python = "^3.11"
 typer = "^0.21"
+click = "^8.1"
 rich = "^14.2"
 update-all-core = { path = "../core", develop = true }
 update-all-plugins = { path = "../plugins", develop = true }

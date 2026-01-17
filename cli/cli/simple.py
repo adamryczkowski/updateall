@@ -84,7 +84,7 @@ async def run_plugin_steps(
     Returns:
         Exit code (0 = success, 1 = failure, 2 = skipped)
     """
-    from core.streaming import CompletionEvent
+    from core.streaming import CompletionEvent, OutputEvent, PhaseEvent, ProgressEvent
 
     name = plugin.name
 
@@ -166,7 +166,7 @@ async def run_plugin_steps(
                 click.echo(f"[{name}] Step 3/4: Skipping (--skip-download)")
 
     # =========================================================================
-    # Step 4: Execute (upgrade)
+    # Step 4: Execute (upgrade) - Use streaming for real-time output
     # =========================================================================
     if verbose:
         click.echo(f"[{name}] Step 4/4: Executing update...")
@@ -174,24 +174,47 @@ async def run_plugin_steps(
         click.echo(f"[{name}] Executing...")
 
     try:
-        result = await plugin.execute(dry_run=dry_run)
+        # Use execute_streaming() for real-time output display
+        final_success = False
+        final_packages = 0
+        final_error: str | None = None
 
-        if result.status.value == "success":
+        async for event in plugin.execute_streaming(dry_run=dry_run):
+            if isinstance(event, OutputEvent):
+                # Print output lines in real-time
+                click.echo(f"  {event.line}")
+            elif isinstance(event, ProgressEvent):
+                # Show progress updates
+                if event.percent is not None:
+                    msg = f"  [{event.percent:.0f}%]"
+                    if event.message:
+                        msg += f" {event.message}"
+                    click.echo(msg)
+                elif event.message:
+                    click.echo(f"  {event.message}")
+            elif isinstance(event, PhaseEvent):
+                # Log phase transitions in verbose mode
+                if verbose:
+                    if event.event_type.value == "phase_start":
+                        click.echo(f"  [Phase: {event.phase.value} started]")
+                    elif event.event_type.value == "phase_end":
+                        status = "✓" if event.success else "✗"
+                        click.echo(f"  [Phase: {event.phase.value} {status}]")
+            elif isinstance(event, CompletionEvent):
+                # Track final status
+                final_success = event.success
+                final_packages = event.packages_updated
+                final_error = event.error_message
+
+        # Report final status
+        if final_success:
             msg = f"[{name}] Success ✓"
-            if result.packages_updated:
-                msg += f" - {result.packages_updated} package(s) updated"
+            if final_packages:
+                msg += f" - {final_packages} package(s) updated"
             click.echo(msg)
-            if verbose and result.stdout:
-                # Show last few lines of output
-                lines = result.stdout.strip().splitlines()
-                for line in lines[-5:]:
-                    click.echo(f"  {line}")
             return 0
         else:
-            click.echo(f"[{name}] Failed: {result.error_message or result.status.value}")
-            if verbose and result.stderr:
-                for line in result.stderr.strip().splitlines()[-5:]:
-                    click.echo(f"  {line}")
+            click.echo(f"[{name}] Failed: {final_error or 'Unknown error'}")
             return 1
 
     except Exception as e:

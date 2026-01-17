@@ -54,14 +54,15 @@ For development or if you want to modify the code:
 - Python 3.11 or later
 - [Poetry](https://python-poetry.org/) 2.0 or later
 - [just](https://github.com/casey/just) command runner
+- [pre-commit](https://pre-commit.com/) for code quality hooks
 
 ```bash
 # Clone the repository
 git clone https://github.com/adamryczkowski/updateall.git
 cd updateall
 
-# Install all components
-just install-all
+# Set up development environment (installs dependencies + pre-commit hooks)
+just setup
 
 # Verify installation
 just run -- --version

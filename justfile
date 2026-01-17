@@ -8,6 +8,11 @@ subprojects := "core cli plugins ui stats"
 default:
     @just --list
 
+# Set up development environment (everything except Python itself)
+# Installs all dependencies and configures pre-commit hooks
+setup: install-all pre-commit-install
+    @echo "Development environment setup complete!"
+
 # Install dependencies for all subprojects
 install-all:
     #!/usr/bin/env bash

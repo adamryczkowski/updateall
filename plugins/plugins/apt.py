@@ -6,12 +6,19 @@ on Debian-based distributions (Debian, Ubuntu, Linux Mint, etc.).
 Official documentation:
 - APT: https://wiki.debian.org/Apt
 - apt command: https://manpages.debian.org/apt
+- apt-get man page: https://manpages.debian.org/bookworm/apt/apt-get.8.en.html
 
-Update mechanism:
-- apt update: Refreshes package lists from repositories
-- apt upgrade -y: Upgrades all installed packages
+Three-phase update mechanism:
+- CHECK: apt update - Refreshes package lists from repositories
+- DOWNLOAD: apt upgrade --download-only - Downloads packages to /var/cache/apt/archives/
+- EXECUTE: apt upgrade --no-download --ignore-missing - Installs only cached packages
 
-Note: Requires sudo privileges for both update and upgrade operations.
+Key options (from apt-get man page):
+- --download-only (-d): Download only; package files are only retrieved, not unpacked or installed
+- --no-download: Disables downloading of packages, uses only cached .deb files
+- --ignore-missing (-m): If packages cannot be retrieved, hold them back and continue
+
+Note: Requires sudo privileges for all operations.
 """
 
 from __future__ import annotations
@@ -31,9 +38,13 @@ if TYPE_CHECKING:
 class AptPlugin(BasePlugin):
     """Plugin for APT package manager (Debian/Ubuntu).
 
-    Executes:
-    1. sudo apt update - refresh package lists
-    2. sudo apt upgrade -y - upgrade all packages
+    Three-phase execution:
+    1. CHECK: sudo apt update - refresh package lists
+    2. DOWNLOAD: sudo apt upgrade --download-only -y - download packages to cache
+    3. EXECUTE: sudo apt upgrade --no-download --ignore-missing -y - install cached packages
+
+    The download size can be obtained by running apt upgrade --dry-run after apt update
+    and parsing the "Need to get X MB of archives" line from the output.
     """
 
     @property
@@ -64,11 +75,12 @@ class AptPlugin(BasePlugin):
         """Return mutexes required for each execution phase.
 
         APT requires exclusive access to APT and DPKG locks during
-        both CHECK and EXECUTE phases to prevent conflicts with
+        CHECK, DOWNLOAD, and EXECUTE phases to prevent conflicts with
         other package managers.
         """
         return {
             Phase.CHECK: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
+            Phase.DOWNLOAD: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
             Phase.EXECUTE: [StandardMutexes.APT_LOCK, StandardMutexes.DPKG_LOCK],
         }
 
@@ -101,8 +113,11 @@ class AptPlugin(BasePlugin):
 
         APT phases:
         - CHECK: Update package lists (apt update)
-        - DOWNLOAD: Download packages without installing (apt upgrade --download-only)
-        - EXECUTE: Install downloaded packages (apt upgrade -y)
+        - DOWNLOAD: Download packages without installing (apt upgrade --download-only -y)
+        - EXECUTE: Install only cached packages (apt upgrade --no-download --ignore-missing -y)
+
+        The --no-download flag ensures APT uses only already-downloaded .deb files.
+        The --ignore-missing flag allows APT to continue if some packages are missing.
 
         Args:
             dry_run: If True, return commands that simulate the update.
@@ -119,7 +134,14 @@ class AptPlugin(BasePlugin):
         return {
             Phase.CHECK: ["sudo", "apt", "update"],
             Phase.DOWNLOAD: ["sudo", "apt", "upgrade", "--download-only", "-y"],
-            Phase.EXECUTE: ["sudo", "apt", "upgrade", "-y"],
+            Phase.EXECUTE: [
+                "sudo",
+                "apt",
+                "upgrade",
+                "--no-download",
+                "--ignore-missing",
+                "-y",
+            ],
         }
 
     def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
@@ -226,3 +248,62 @@ class AptPlugin(BasePlugin):
         # Fallback: count "Unpacking" lines
         unpacking_count = len(re.findall(r"^Unpacking\s+", output, re.MULTILINE))
         return unpacking_count
+
+    def parse_upgrade_info(self, output: str) -> dict[str, int]:
+        """Parse apt upgrade --dry-run output for upgrade information.
+
+        Extracts:
+        - Number of packages to upgrade
+        - Total download size in bytes
+        - Disk space change in bytes
+
+        The output typically contains lines like:
+        - "X upgraded, Y newly installed, Z to remove and W not upgraded."
+        - "Need to get 45.3 MB of archives."
+        - "After this operation, 12.5 MB of additional disk space will be used."
+
+        Args:
+            output: Output from apt upgrade --dry-run command.
+
+        Returns:
+            Dict with keys: packages_to_upgrade, download_size_bytes, disk_space_change_bytes
+        """
+        info: dict[str, int] = {
+            "packages_to_upgrade": 0,
+            "download_size_bytes": 0,
+            "disk_space_change_bytes": 0,
+        }
+
+        # Match "X upgraded"
+        match = re.search(r"(\d+)\s+upgraded", output)
+        if match:
+            info["packages_to_upgrade"] = int(match.group(1))
+
+        # Match "Need to get X MB of archives" or "Need to get X kB of archives"
+        match = re.search(r"Need to get ([\d.,]+)\s*([kKMGT]?B)", output)
+        if match:
+            size_str = match.group(1).replace(",", ".")
+            size = float(size_str)
+            unit = match.group(2).upper()
+            # APT uses kB (1000 bytes), not KiB (1024 bytes)
+            multipliers = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4}
+            info["download_size_bytes"] = int(size * multipliers.get(unit, 1))
+
+        # Match "After this operation, X MB of additional disk space will be used"
+        # or "After this operation, X MB disk space will be freed"
+        match = re.search(
+            r"After this operation,\s*([\d.,]+)\s*([kKMGT]?B).*(?:will be used|will be freed)",
+            output,
+        )
+        if match:
+            size_str = match.group(1).replace(",", ".")
+            size = float(size_str)
+            unit = match.group(2).upper()
+            multipliers = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4}
+            disk_change = int(size * multipliers.get(unit, 1))
+            # If "freed", make it negative
+            if "freed" in output[match.start() : match.end()]:
+                disk_change = -disk_change
+            info["disk_space_change_bytes"] = disk_change
+
+        return info

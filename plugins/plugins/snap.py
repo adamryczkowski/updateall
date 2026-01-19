@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -96,6 +96,40 @@ class SnapPlugin(BasePlugin):
     @property
     def supports_download(self) -> bool:
         return True
+
+    async def check_updates(self) -> list[dict[str, Any]]:
+        """Check for available snap updates via Snap Store API.
+
+        Uses the Snap Store API to get refresh candidates, bypassing the
+        `snap refresh --list` command which doesn't work when automatic
+        updates are blocked via /etc/hosts.
+        """
+        log = logger.bind(plugin=self.name)
+
+        try:
+            candidates = await get_refresh_candidates()
+            self._candidates = candidates
+
+            if not candidates:
+                log.info("no_snap_updates_available")
+                return []
+
+            log.info("snap_updates_available", count=len(candidates))
+
+            return [
+                {
+                    "name": c.name,
+                    "version": c.version or f"rev{c.revision}",
+                    "revision": c.revision,
+                    "current_revision": c.current_revision,
+                    "size_bytes": c.size,
+                }
+                for c in candidates
+            ]
+
+        except Exception as e:
+            log.warning("check_updates_failed", error=str(e))
+            return []
 
     def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
         if dry_run:

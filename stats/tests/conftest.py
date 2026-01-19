@@ -13,6 +13,20 @@ from stats.db.connection import DatabaseConnection
 from stats.db.models import ExecutionStatus, PluginExecution, Run, StepMetrics, StepPhase
 
 
+@pytest.fixture(autouse=True)
+def isolated_xdg_data_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Isolate XDG_DATA_HOME to prevent DuckDB lock conflicts.
+
+    The DuckDBHistoryStore uses XDG_DATA_HOME to determine the database path.
+    By setting this to a temporary directory, we ensure tests don't conflict
+    with the real database or other test processes.
+    """
+    data_home = tmp_path / "xdg_data"
+    data_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    return data_home
+
+
 @pytest.fixture
 def temp_db_path(tmp_path: Path) -> Path:
     """Provide a temporary database path for testing.

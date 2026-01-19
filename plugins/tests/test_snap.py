@@ -96,6 +96,107 @@ chromium (119.0 -> 120.0)
         assert commands == []
 
 
+class TestSnapPluginCheckUpdates:
+    """Tests for SnapPlugin.check_updates method."""
+
+    @pytest.mark.asyncio
+    async def test_check_updates_with_candidates(self) -> None:
+        """Test check_updates returns update info from Snap Store API."""
+        plugin = SnapPlugin()
+
+        mock_candidates = [
+            SnapDownloadInfo(
+                name="firefox",
+                snap_id="id1",
+                download_url="https://example.com/firefox.snap",
+                sha3_384="a" * 96,
+                size=100_000_000,
+                revision=101,
+                current_revision=100,
+                version="120.0",
+            ),
+            SnapDownloadInfo(
+                name="chromium",
+                snap_id="id2",
+                download_url="https://example.com/chromium.snap",
+                sha3_384="b" * 96,
+                size=50_000_000,
+                revision=201,
+                current_revision=200,
+                version="119.0",
+            ),
+        ]
+
+        with patch(
+            "plugins.snap.get_refresh_candidates",
+            new_callable=AsyncMock,
+            return_value=mock_candidates,
+        ):
+            updates = await plugin.check_updates()
+
+        assert len(updates) == 2
+        assert updates[0]["name"] == "firefox"
+        assert updates[0]["version"] == "120.0"
+        assert updates[0]["revision"] == 101
+        assert updates[0]["current_revision"] == 100
+        assert updates[0]["size_bytes"] == 100_000_000
+        assert updates[1]["name"] == "chromium"
+        assert updates[1]["version"] == "119.0"
+
+    @pytest.mark.asyncio
+    async def test_check_updates_no_updates(self) -> None:
+        """Test check_updates returns empty list when no updates."""
+        plugin = SnapPlugin()
+
+        with patch(
+            "plugins.snap.get_refresh_candidates",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            updates = await plugin.check_updates()
+
+        assert updates == []
+
+    @pytest.mark.asyncio
+    async def test_check_updates_stores_candidates(self) -> None:
+        """Test that check_updates stores candidates for later use."""
+        plugin = SnapPlugin()
+
+        mock_candidates = [
+            SnapDownloadInfo(
+                name="test",
+                snap_id="id",
+                download_url="url",
+                sha3_384="a" * 96,
+                size=1000,
+                revision=1,
+            ),
+        ]
+
+        with patch(
+            "plugins.snap.get_refresh_candidates",
+            new_callable=AsyncMock,
+            return_value=mock_candidates,
+        ):
+            await plugin.check_updates()
+
+        assert plugin._candidates == mock_candidates
+
+    @pytest.mark.asyncio
+    async def test_check_updates_handles_error(self) -> None:
+        """Test check_updates returns empty list on error."""
+        plugin = SnapPlugin()
+
+        with patch(
+            "plugins.snap.get_refresh_candidates",
+            new_callable=AsyncMock,
+            side_effect=Exception("API error"),
+        ):
+            updates = await plugin.check_updates()
+
+        assert updates == []
+
+
 class TestSnapPluginEstimateDownload:
     """Tests for SnapPlugin.estimate_download method."""
 

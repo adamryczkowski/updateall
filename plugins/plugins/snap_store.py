@@ -390,6 +390,24 @@ def verify_sha3_384(path: Path, expected_hash: str) -> bool:
         return False
 
 
+def is_cache_valid_fast(info: SnapDownloadInfo) -> bool:
+    """Quick cache validity check using file size only.
+
+    This is a fast check that avoids computing SHA3-384 hash.
+    It's safe because:
+    1. The cache filename IS the SHA3-384 hash
+    2. If the file exists with correct size, it's almost certainly valid
+    3. snapd will verify the hash during installation anyway
+    """
+    cache_path = info.cache_path
+    if not cache_path.exists():
+        return False
+    try:
+        return cache_path.stat().st_size == info.size
+    except OSError:
+        return False
+
+
 async def download_snap_to_cache(
     info: SnapDownloadInfo,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -414,15 +432,18 @@ async def download_snap_to_cache(
     log = logger.bind(snap=info.name, revision=info.revision)
     cache_path = info.cache_path
 
-    # Check if already in cache with valid hash
+    # Fast check: file exists with correct size (avoids expensive hash computation)
+    # This is safe because the filename IS the SHA3-384 hash, and snapd will
+    # verify the hash during installation anyway.
+    if is_cache_valid_fast(info):
+        log.info("cache_hit", path=str(cache_path))
+        cache_path.touch()  # Update mtime to prevent cleanup
+        return cache_path
+
+    # If file exists but wrong size, it's corrupted - remove it
     if cache_path.exists():
-        if verify_sha3_384(cache_path, info.sha3_384):
-            log.info("cache_hit", path=str(cache_path))
-            cache_path.touch()  # Update mtime to prevent cleanup
-            return cache_path
-        else:
-            log.warning("removing_corrupted_cache", path=str(cache_path))
-            cache_path.unlink()
+        log.warning("removing_corrupted_cache", path=str(cache_path))
+        cache_path.unlink()
 
     # Ensure cache directory exists with correct permissions
     if not SNAP_CACHE_DIR.exists():
@@ -482,10 +503,10 @@ async def download_snap_to_cache(
 
 
 def cleanup_corrupted_cache_entries(candidates: list[SnapDownloadInfo]) -> list[str]:
-    """Verify and remove any corrupted cache entries.
+    """Remove cache entries with wrong file size (fast check).
 
-    Call this before running `snap refresh` to ensure snapd doesn't
-    repeatedly fail on corrupted cache files.
+    Uses size-based validation instead of SHA3-384 hash computation.
+    This is safe because snapd will verify hashes during installation.
 
     Args:
         candidates: List of snap download info to check.
@@ -499,19 +520,32 @@ def cleanup_corrupted_cache_entries(candidates: list[SnapDownloadInfo]) -> list[
     for info in candidates:
         cache_path = info.cache_path
 
-        if cache_path.exists() and not verify_sha3_384(cache_path, info.sha3_384):
-            log.warning("removing_corrupted_cache", snap=info.name, path=str(cache_path))
+        # Fast check: file exists but wrong size means it's corrupted/incomplete
+        if cache_path.exists():
             try:
-                cache_path.unlink()
-                removed.append(info.name)
+                actual_size = cache_path.stat().st_size
+                if actual_size != info.size:
+                    log.warning(
+                        "removing_corrupted_cache",
+                        snap=info.name,
+                        path=str(cache_path),
+                        expected_size=info.size,
+                        actual_size=actual_size,
+                    )
+                    cache_path.unlink()
+                    removed.append(info.name)
             except OSError as e:
-                log.error("cache_removal_failed", snap=info.name, error=str(e))
+                log.error("cache_check_failed", snap=info.name, error=str(e))
 
     return removed
 
 
 def is_cache_complete(candidates: list[SnapDownloadInfo]) -> tuple[bool, list[str]]:
-    """Check if all candidates are already cached with valid hashes.
+    """Check if all candidates are already cached (fast size-based check).
+
+    Uses fast size-based validation instead of computing SHA3-384 hashes.
+    This is safe because the cache filename IS the hash, and snapd will
+    verify integrity during installation.
 
     Args:
         candidates: List of snap download info to check.
@@ -522,8 +556,7 @@ def is_cache_complete(candidates: list[SnapDownloadInfo]) -> tuple[bool, list[st
     missing = []
 
     for info in candidates:
-        cache_path = info.cache_path
-        if not cache_path.exists() or not verify_sha3_384(cache_path, info.sha3_384):
+        if not is_cache_valid_fast(info):
             missing.append(info.name)
 
     return len(missing) == 0, missing

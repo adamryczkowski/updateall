@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pipx Three-Step Upgrade** - Implemented CHECK → DOWNLOAD → EXECUTE pattern for pipx plugin
+  - `check_for_updates()` - Identifies outdated main/injected packages using pipx_metadata.json
+  - `download_updates()` - Downloads packages to cache (~/.cache/updateall/pipx/)
+  - `install_updates()` - Installs from cache using offline mode (--no-index --find-links)
+  - New data structures: `OutdatedPackage`, `VenvMetadata`
+  - 50 new tests in `plugins/tests/test_pipx_three_step.py`
+- `docs/pipx-three-step-upgrade-research.md` - Research document for pipx three-step upgrade
 - `ui/ui/models.py` - New module for data models (extracted from interactive_tabbed_run.py)
 - `ui/ui/messages.py` - New module for Textual message classes (extracted from interactive_tabbed_run.py)
 - `ui/tests/test_regression_bugs.py` - Consolidated regression tests for bug fixes

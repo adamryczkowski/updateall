@@ -166,8 +166,9 @@ class TestDataPreprocessor:
         )
 
         values = target_series.values()
-        assert np.min(values) >= 0.0
-        assert np.max(values) <= 1.0
+        # Use np.isclose for floating point comparison to avoid precision issues
+        assert np.min(values) >= 0.0 or np.isclose(np.min(values), 0.0)
+        assert np.max(values) <= 1.0 or np.isclose(np.max(values), 1.0)
 
     def test_scaling_standard(self, synthetic_data: pd.DataFrame) -> None:
         """Test Standard scaling produces approximately zero mean."""

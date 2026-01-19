@@ -1,22 +1,25 @@
-"""Snap package manager plugin.
+"""Snap package manager plugin with three-step upgrade support.
 
 This plugin updates Snap packages on Ubuntu and other distributions
 that support the Snap package format.
+
+Three-step upgrade process:
+1. CHECK: Query Snap Store API for refresh candidates with download info
+2. DOWNLOAD: Pre-download snap files to /var/lib/snapd/cache/<sha3-384>
+3. INSTALL: Run `snap refresh` which uses cached files if available
+
+This approach allows downloading during cheap internet windows even if
+electricity for updates may be expensive later. Since snapd verifies
+SHA3-384 hashes of cached files, if we download wrong content, snapd
+will reject it and re-download, making this approach safe.
 
 Official documentation:
 - Snapcraft: https://snapcraft.io/
 - snap command: https://snapcraft.io/docs/getting-started
 - Managing updates: https://snapcraft.io/docs/keeping-snaps-up-to-date
 
-Update mechanism:
-- snap refresh: Refreshes all installed snaps to their latest versions
-- snap remove --revision: Removes old disabled snap revisions to free disk space
-
 Note: Requires sudo privileges for refresh and remove operations.
-
-References for cleanup approach:
-- https://superuser.com/questions/1310825/how-to-remove-old-version-of-installed-snaps
-- https://itsfoss.com/clean-snap-packages/
+Download phase also requires root to write to /var/lib/snapd/cache.
 """
 
 from __future__ import annotations
@@ -28,16 +31,24 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from core.models import UpdateCommand
+from core.models import DownloadEstimate, PackageDownload, UpdateCommand
 from core.mutex import StandardMutexes
 from core.streaming import (
     CompletionEvent,
     EventType,
     OutputEvent,
     Phase,
+    ProgressEvent,
     StreamEvent,
 )
 from plugins.base import BasePlugin
+from plugins.snap_store import (
+    SnapDownloadInfo,
+    cleanup_corrupted_cache_entries,
+    download_snap_to_cache,
+    get_refresh_candidates,
+    is_cache_complete,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -48,59 +59,45 @@ logger = structlog.get_logger(__name__)
 
 
 class SnapPlugin(BasePlugin):
-    """Plugin for Snap package manager (Ubuntu/Canonical).
+    """Plugin for Snap package manager with three-step upgrade support.
 
-    Executes:
-    1. sudo snap refresh - refresh all snaps
-    2. Remove old disabled snap revisions to free disk space
+    Supports:
+    1. Three-step upgrade: check → download → install
+    2. Legacy single-step: sudo snap refresh
+    3. Cleanup of old disabled snap revisions
     """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._candidates: list[SnapDownloadInfo] = []
 
     @property
     def name(self) -> str:
-        """Return the plugin name."""
         return "snap"
 
     @property
     def command(self) -> str:
-        """Return the main command."""
         return "snap"
 
     @property
     def description(self) -> str:
-        """Return plugin description."""
         return "Canonical Snap package manager"
 
     @property
     def sudo_commands(self) -> list[str]:
-        """Return list of commands that require sudo.
-
-        Snap requires sudo for refresh and remove operations.
-        """
         return ["/usr/bin/snap"]
 
     @property
     def mutexes(self) -> dict[Phase, list[str]]:
-        """Return mutexes required for each execution phase.
-
-        Snap requires exclusive access to the SNAP lock during execution.
-        """
         return {
             Phase.EXECUTE: [StandardMutexes.SNAP_LOCK],
         }
 
+    @property
+    def supports_download(self) -> bool:
+        return True
+
     def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
-        """Get commands to refresh snaps.
-
-        Note: This returns only the refresh command. The cleanup of old
-        revisions is handled in _execute_update_streaming() because it
-        requires parsing output and executing multiple commands dynamically.
-
-        Args:
-            dry_run: If True, return dry-run commands.
-
-        Returns:
-            List of UpdateCommand objects.
-        """
         if dry_run:
             return [
                 UpdateCommand(
@@ -112,18 +109,198 @@ class SnapPlugin(BasePlugin):
         # Return empty list to use _execute_update_streaming() for full control
         return []
 
+    async def estimate_download(self) -> DownloadEstimate | None:
+        """Estimate download size by querying Snap Store API."""
+        log = logger.bind(plugin=self.name)
+
+        try:
+            candidates = await get_refresh_candidates()
+            self._candidates = candidates
+
+            if not candidates:
+                return None
+
+            total_bytes = sum(c.size for c in candidates)
+            packages = [
+                PackageDownload(
+                    name=c.name,
+                    version=c.version or f"rev{c.revision}",
+                    size_bytes=c.size,
+                    url=c.download_url,
+                )
+                for c in candidates
+            ]
+
+            log.info(
+                "download_estimate",
+                package_count=len(candidates),
+                total_bytes=total_bytes,
+            )
+
+            return DownloadEstimate(
+                total_bytes=total_bytes,
+                package_count=len(candidates),
+                packages=packages,
+            )
+
+        except Exception as e:
+            log.warning("estimate_download_failed", error=str(e))
+            return None
+
+    async def download(self) -> AsyncIterator[StreamEvent]:
+        """Pre-download snaps to cache for later installation."""
+        log = logger.bind(plugin=self.name)
+
+        # Check if we have candidates from estimate_download
+        if not self._candidates:
+            self._candidates = await get_refresh_candidates()
+
+        candidates = self._candidates
+
+        if not candidates:
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line="No snap updates available to download.",
+                stream="stdout",
+            )
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=True,
+                exit_code=0,
+            )
+            return
+
+        # Check root access
+        if os.geteuid() != 0:
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line="Error: Root access required to write to snap cache.",
+                stream="stderr",
+            )
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=1,
+                error_message="Root access required to write to snap cache",
+            )
+            return
+
+        total_size = sum(c.size for c in candidates)
+        total_downloaded = 0
+        downloaded_count = 0
+        failed: list[tuple[str, str]] = []
+
+        yield OutputEvent(
+            event_type=EventType.OUTPUT,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            line=f"Downloading {len(candidates)} snap(s) to cache...",
+            stream="stdout",
+        )
+
+        for i, candidate in enumerate(candidates, 1):
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=f"[{i}/{len(candidates)}] {candidate.name} ({candidate.format_size()})",
+                stream="stdout",
+            )
+
+            snap_bytes_downloaded = 0
+
+            def progress_callback(bytes_downloaded: int, _total_bytes: int) -> None:
+                nonlocal snap_bytes_downloaded
+                snap_bytes_downloaded = bytes_downloaded
+
+            try:
+                await download_snap_to_cache(candidate, progress_callback)
+                downloaded_count += 1
+                total_downloaded += candidate.size
+
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=f"  ✓ Downloaded {candidate.name}",
+                    stream="stdout",
+                )
+
+                # Emit progress event
+                percent = (total_downloaded / total_size * 100) if total_size > 0 else 100
+                yield ProgressEvent(
+                    event_type=EventType.PROGRESS,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    phase=Phase.DOWNLOAD,
+                    percent=percent,
+                    bytes_downloaded=total_downloaded,
+                    bytes_total=total_size,
+                    items_completed=downloaded_count,
+                    items_total=len(candidates),
+                )
+
+            except Exception as e:
+                log.warning("snap_download_failed", snap=candidate.name, error=str(e))
+                failed.append((candidate.name, str(e)))
+
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=f"  ✗ Failed to download {candidate.name}: {e}",
+                    stream="stderr",
+                )
+
+        # Summary
+        if failed:
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=f"Downloaded {downloaded_count}/{len(candidates)} snap(s). {len(failed)} failed.",
+                stream="stdout",
+            )
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=1,
+                error_message=f"Failed to download: {', '.join(name for name, _ in failed)}",
+            )
+        else:
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=f"Successfully downloaded {downloaded_count} snap(s) to cache.",
+                stream="stdout",
+            )
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=True,
+                exit_code=0,
+            )
+
     async def _get_disabled_snap_revisions(self) -> list[tuple[str, str]]:
         """Get list of disabled snap revisions.
 
         Parses output of 'snap list --all' to find disabled revisions.
         Uses LANG=en_US.UTF-8 to ensure consistent "disabled" label.
-
-        Returns:
-            List of (snap_name, revision) tuples for disabled snaps.
         """
         log = logger.bind(plugin=self.name)
 
-        # Set LANG to ensure consistent output parsing
         env = os.environ.copy()
         env["LANG"] = "en_US.UTF-8"
 
@@ -141,12 +318,9 @@ class SnapPlugin(BasePlugin):
         disabled_snaps: list[tuple[str, str]] = []
 
         for line in stdout.splitlines():
-            # Skip header line
             if line.startswith("Name") or not line.strip():
                 continue
 
-            # Parse line: Name Version Rev Tracking Publisher Notes
-            # The "disabled" keyword appears in the Notes column
             if "disabled" in line.lower():
                 parts = line.split()
                 if len(parts) >= 3:
@@ -158,20 +332,44 @@ class SnapPlugin(BasePlugin):
         return disabled_snaps
 
     async def _execute_update_streaming(self) -> AsyncIterator[StreamEvent]:
-        """Execute snap refresh and cleanup old revisions with streaming.
-
-        This method:
-        1. Runs 'snap refresh' to update all snaps
-        2. Finds and removes old disabled snap revisions
-
-        Yields:
-            StreamEvent objects as the update executes.
-        """
+        """Execute snap refresh and cleanup old revisions with streaming."""
         log = logger.bind(plugin=self.name)
         collected_output: list[str] = []
         final_success = True
         final_error: str | None = None
         packages_updated = 0
+
+        # Clean up any corrupted cache entries before refresh
+        if self._candidates:
+            removed = cleanup_corrupted_cache_entries(self._candidates)
+            if removed:
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=f"Removed {len(removed)} corrupted cache entry(ies): {', '.join(removed)}",
+                    stream="stdout",
+                )
+
+        # Check if downloads are cached
+        if self._candidates:
+            all_cached, missing = is_cache_complete(self._candidates)
+            if all_cached:
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=f"All {len(self._candidates)} snap(s) are pre-cached. Installation will be fast.",
+                    stream="stdout",
+                )
+            elif missing:
+                yield OutputEvent(
+                    event_type=EventType.OUTPUT,
+                    plugin_name=self.name,
+                    timestamp=datetime.now(tz=UTC),
+                    line=f"Note: {len(missing)} snap(s) not cached, will download during refresh.",
+                    stream="stdout",
+                )
 
         # Step 1: Refresh all snaps
         yield OutputEvent(
@@ -194,9 +392,7 @@ class SnapPlugin(BasePlugin):
                 collected_output.append(event.line)
                 yield event
             elif isinstance(event, CompletionEvent):
-                # Check for success - "All snaps up to date" is also success
                 if not event.success:
-                    # Check if it's actually a success case
                     full_output = "\n".join(collected_output)
                     if "All snaps up to date" not in full_output:
                         refresh_success = False
@@ -216,7 +412,6 @@ class SnapPlugin(BasePlugin):
             )
             return
 
-        # Count refreshed packages
         full_output = "\n".join(collected_output)
         packages_updated = self._count_updated_packages(full_output)
 
@@ -267,7 +462,6 @@ class SnapPlugin(BasePlugin):
 
                 log.debug("removing_snap_revision", name=snap_name, revision=revision)
 
-                # Remove the specific revision
                 return_code, _stdout, stderr = await self._run_command(
                     ["snap", "remove", snap_name, f"--revision={revision}"],
                     timeout=120,
@@ -284,7 +478,6 @@ class SnapPlugin(BasePlugin):
                         stream="stdout",
                     )
                 else:
-                    # Log warning but continue with other revisions
                     log.warning(
                         "snap_remove_revision_failed",
                         name=snap_name,
@@ -307,7 +500,9 @@ class SnapPlugin(BasePlugin):
                 stream="stdout",
             )
 
-        # Emit final completion
+        # Clear candidates after successful refresh
+        self._candidates = []
+
         yield CompletionEvent(
             event_type=EventType.COMPLETION,
             plugin_name=self.name,
@@ -319,14 +514,7 @@ class SnapPlugin(BasePlugin):
         )
 
     async def _execute_update(self, config: PluginConfig) -> tuple[str, str | None]:
-        """Execute snap refresh and cleanup (legacy API).
-
-        Args:
-            config: Plugin configuration.
-
-        Returns:
-            Tuple of (output, error_message).
-        """
+        """Execute snap refresh and cleanup (legacy API)."""
         output_parts: list[str] = []
 
         # Step 1: Refresh snaps
@@ -339,7 +527,6 @@ class SnapPlugin(BasePlugin):
         output_parts.append("=== snap refresh ===")
         output_parts.append(stdout)
 
-        # snap returns non-zero if nothing to refresh (but "All snaps up to date" is success)
         if (
             return_code != 0
             and "All snaps up to date" not in stdout
@@ -379,23 +566,10 @@ class SnapPlugin(BasePlugin):
         return "\n".join(output_parts), None
 
     def _count_updated_packages(self, output: str) -> int:
-        """Count updated packages from snap output.
-
-        Looks for patterns like:
-        - "name X refreshed"
-        - Lines with version changes
-
-        Args:
-            output: Command output.
-
-        Returns:
-            Number of packages updated.
-        """
-        # Count "refreshed" mentions
+        """Count updated packages from snap output."""
         refreshed_count = len(re.findall(r"\S+\s+\S+\s+refreshed", output, re.IGNORECASE))
 
         if refreshed_count == 0:
-            # Alternative: count lines with arrow indicating version change
             refreshed_count = len(re.findall(r"→|->", output))
 
         return refreshed_count

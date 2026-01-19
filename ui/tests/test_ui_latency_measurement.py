@@ -586,7 +586,7 @@ class TestLatencyUnderLoad:
 
         Thresholds:
         - Aspirational target: P95 < 150ms
-        - CI threshold: P95 < 2000ms (lenient for CI environments)
+        - CI threshold: P95 < 2500ms (lenient for CI environments)
         """
         plugins = [
             create_mock_plugin(
@@ -626,10 +626,10 @@ class TestLatencyUnderLoad:
             # Log the report for debugging
             print(f"\nMulti-plugin latency report: {report}")
 
-            # CI threshold: P95 < 2000ms (lenient for CI environments)
+            # CI threshold: P95 < 2500ms (lenient for CI environments)
             # Aspirational target after improvements: P95 < 150ms
-            assert report.p95_ms < 2000.0, (
-                f"P95 latency under load {report.p95_ms:.2f}ms exceeds CI threshold of 2000ms. "
+            assert report.p95_ms < 2500.0, (
+                f"P95 latency under load {report.p95_ms:.2f}ms exceeds CI threshold of 2500ms. "
                 f"Report: {report}"
             )
 

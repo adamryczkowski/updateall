@@ -35,6 +35,7 @@ packages = [{ include = "plugins" }]
 python = "^3.11"
 update-all-core = { path = "../core", develop = true }
 aiohttp = "^3.13.3"
+aiodns = "^3.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

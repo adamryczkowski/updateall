@@ -20,6 +20,10 @@ Security:
 - SHA3-384 ensures integrity - snapd will reject tampered files
 - Cache directory is root-owned with 0700 permissions
 - Snap assertions are still verified during installation
+
+DNS bypass:
+- Uses external DNS servers to bypass /etc/hosts overrides
+- This allows controlled updates even when automatic updates are blocked
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import structlog
+from aiohttp.abc import AbstractResolver, ResolveResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,6 +51,93 @@ SNAP_CACHE_DIR = Path("/var/lib/snapd/cache")
 SNAP_STORE_API = "https://api.snapcraft.io/v2/snaps/refresh"
 SNAPD_SOCKET = "/run/snapd.socket"
 CHUNK_SIZE = 65536
+
+# External DNS servers to bypass /etc/hosts overrides
+EXTERNAL_DNS_SERVERS = ["1.1.1.1", "8.8.8.8"]
+
+# Domains that need DNS bypass for snap updates
+SNAP_DOMAINS = frozenset(
+    {
+        "api.snapcraft.io",
+        "dashboard.snapcraft.io",
+        "login.ubuntu.com",
+    }
+)
+
+
+class ExternalDNSResolver(AbstractResolver):
+    """Resolver that uses external DNS servers for specific domains.
+
+    This bypasses /etc/hosts overrides that may block snap update domains,
+    allowing controlled updates even when automatic updates are disabled.
+    """
+
+    def __init__(
+        self,
+        bypass_domains: frozenset[str] = SNAP_DOMAINS,
+        nameservers: list[str] | None = None,
+    ) -> None:
+        self._bypass_domains = bypass_domains
+        self._nameservers = nameservers or EXTERNAL_DNS_SERVERS
+        self._external_resolver: AbstractResolver | None = None
+        self._default_resolver: AbstractResolver | None = None
+
+    async def _get_external_resolver(self) -> AbstractResolver:
+        if self._external_resolver is None:
+            try:
+                from aiohttp.resolver import AsyncResolver
+
+                self._external_resolver = AsyncResolver(nameservers=self._nameservers)
+            except RuntimeError:
+                # aiodns not available, fall back to manual DNS query
+                from aiohttp.resolver import ThreadedResolver
+
+                self._external_resolver = ThreadedResolver()
+                logger.warning(
+                    "aiodns_not_available",
+                    msg="Using ThreadedResolver, DNS bypass may not work",
+                )
+        return self._external_resolver
+
+    async def _get_default_resolver(self) -> AbstractResolver:
+        if self._default_resolver is None:
+            from aiohttp.resolver import DefaultResolver
+
+            self._default_resolver = DefaultResolver()
+        return self._default_resolver
+
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_INET,
+    ) -> list[ResolveResult]:
+        if host in self._bypass_domains:
+            log = logger.bind(host=host, port=port)
+            log.debug("using_external_dns", nameservers=self._nameservers)
+            resolver = await self._get_external_resolver()
+            try:
+                result = await resolver.resolve(host, port, family)
+                log.debug("external_dns_resolved", addresses=[r["host"] for r in result])
+                return result
+            except OSError as e:
+                log.warning("external_dns_failed", error=str(e))
+                raise
+        else:
+            resolver = await self._get_default_resolver()
+            return await resolver.resolve(host, port, family)
+
+    async def close(self) -> None:
+        if self._external_resolver is not None:
+            await self._external_resolver.close()
+        if self._default_resolver is not None:
+            await self._default_resolver.close()
+
+
+def create_snap_connector() -> aiohttp.TCPConnector:
+    """Create a TCP connector with DNS bypass for snap domains."""
+    resolver = ExternalDNSResolver()
+    return aiohttp.TCPConnector(resolver=resolver)
 
 
 @dataclass(frozen=True)
@@ -200,11 +292,16 @@ async def get_refresh_candidates() -> list[SnapDownloadInfo]:
             epoch_read = [0]
             epoch_write = [0]
 
+        # Revision must be an integer - snapd returns it as a string
+        revision = snap.get("revision", 0)
+        if isinstance(revision, str):
+            revision = int(revision)
+
         context.append(
             {
                 "snap-id": snap_id,
                 "instance-key": snap_id,
-                "revision": snap.get("revision", 0),
+                "revision": revision,
                 "tracking-channel": snap.get("tracking-channel", "latest/stable"),
                 "epoch": {"read": epoch_read, "write": epoch_write},
             }
@@ -229,9 +326,10 @@ async def get_refresh_candidates() -> list[SnapDownloadInfo]:
         "fields": ["download", "revision", "version", "name"],
     }
 
+    connector = create_snap_connector()
     try:
         async with (
-            aiohttp.ClientSession() as session,
+            aiohttp.ClientSession(connector=connector) as session,
             session.post(
                 SNAP_STORE_API,
                 json=payload,
@@ -336,12 +434,13 @@ async def download_snap_to_cache(
     fd, tmp_path_str = tempfile.mkstemp(dir=SNAP_CACHE_DIR, prefix=".download-")
     tmp_path = Path(tmp_path_str)
 
+    connector = create_snap_connector()
     try:
         hasher = hashlib.sha3_384()
         bytes_downloaded = 0
 
         async with (
-            aiohttp.ClientSession() as session,
+            aiohttp.ClientSession(connector=connector) as session,
             session.get(
                 info.download_url,
                 timeout=aiohttp.ClientTimeout(total=3600),

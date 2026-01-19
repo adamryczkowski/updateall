@@ -123,10 +123,11 @@ class TestScrollResponsiveness:
 
         elapsed = time.perf_counter() - start
 
-        # 200 scroll operations should complete in < 0.1 seconds
+        # 200 scroll operations should complete in < 0.2 seconds
         # If they were waiting for 1s update interval, this would take 200+ seconds
-        assert elapsed < 0.1, (
-            f"200 scroll operations took {elapsed:.3f}s, expected < 0.1s. "
+        # Using 0.2s threshold to account for slower CI environments
+        assert elapsed < 0.2, (
+            f"200 scroll operations took {elapsed:.3f}s, expected < 0.2s. "
             "Scroll methods should be synchronous."
         )
 

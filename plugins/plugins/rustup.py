@@ -6,8 +6,17 @@ Official documentation:
 - Rustup: https://rust-lang.github.io/rustup/
 
 Update mechanism:
-- rustup update - Updates all installed toolchains
 - rustup check - Checks for available updates without applying
+- rustup update - Updates all installed toolchains
+
+Phase support:
+- CHECK: rustup check (shows available updates)
+- DOWNLOAD: Not supported by rustup (download and install are interleaved)
+- EXECUTE: rustup update --no-self-update (updates toolchains)
+
+Note: rustup does not support a separate download-only phase. The download
+and installation are performed together per component. See research document
+at docs/research-rustup-three-phase-update.md for details.
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ import shutil
 from typing import TYPE_CHECKING
 
 from core.models import UpdateCommand, UpdateEstimate
+from core.streaming import Phase
 from core.version import compare_versions
 from plugins.base import BasePlugin
 
@@ -54,6 +64,58 @@ class RustupPlugin(BasePlugin):
     async def check_available(self) -> bool:
         """Check if rustup is available for updates."""
         return self.is_available()
+
+    # =========================================================================
+    # Multi-Phase Execution Support
+    # =========================================================================
+
+    def get_interactive_command(self, dry_run: bool = False) -> list[str]:
+        """Get the shell command to run for interactive mode.
+
+        Returns a command that runs rustup update to update all installed
+        toolchains, showing live output in the terminal.
+
+        Args:
+            dry_run: If True, return a command that checks updates without applying.
+
+        Returns:
+            Command and arguments as a list.
+        """
+        if dry_run:
+            return ["rustup", "check"]
+        return ["rustup", "update"]
+
+    def get_phase_commands(self, dry_run: bool = False) -> dict[Phase, list[str]]:
+        """Get commands for each execution phase.
+
+        Rustup phases:
+        - CHECK: Check for available updates (rustup check)
+        - DOWNLOAD: Not supported - rustup interleaves download and install
+        - EXECUTE: Update all toolchains (rustup update --no-self-update)
+
+        Note: rustup does not support a separate download-only phase.
+        The download and installation are performed together per component.
+        See docs/research-rustup-three-phase-update.md for details.
+
+        Args:
+            dry_run: If True, return commands that simulate the update.
+
+        Returns:
+            Dict mapping Phase to command list.
+        """
+        if dry_run:
+            # In dry-run mode, only show CHECK phase
+            return {
+                Phase.CHECK: ["rustup", "check"],
+            }
+
+        # Normal mode: CHECK to list updates, then EXECUTE to apply them
+        # Note: rustup doesn't support separate download phase
+        # Using --no-self-update to avoid rustup updating itself during toolchain update
+        return {
+            Phase.CHECK: ["rustup", "check"],
+            Phase.EXECUTE: ["rustup", "update", "--no-self-update"],
+        }
 
     # =========================================================================
     # Version Checking Protocol Implementation

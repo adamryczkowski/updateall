@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Rustup Multi-Phase Support** - Added CHECK → EXECUTE pattern for rustup plugin
+  - `get_phase_commands()` - Returns phase-specific commands (CHECK: `rustup check`, EXECUTE: `rustup update --no-self-update`)
+  - `get_interactive_command()` - Returns interactive mode commands
+  - Note: DOWNLOAD phase not supported by rustup (download and install are interleaved per component)
+- `docs/research-rustup-three-phase-update.md` - Research document for rustup three-phase update investigation
 - **Pipx Three-Step Upgrade** - Implemented CHECK → DOWNLOAD → EXECUTE pattern for pipx plugin
   - `check_for_updates()` - Identifies outdated main/injected packages using pipx_metadata.json
   - `download_updates()` - Downloads packages to cache (~/.cache/updateall/pipx/)

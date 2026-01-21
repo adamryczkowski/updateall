@@ -1,23 +1,30 @@
 """Cargo (Rust) package manager plugin.
 
 This plugin updates globally installed Rust crates using cargo-update.
+When cargo-binstall (≥0.13.1) is available, cargo-update automatically
+uses it for faster binary installation from pre-built binaries.
 
 Official documentation:
 - Cargo: https://doc.rust-lang.org/cargo/
 - cargo-update: https://github.com/nabijaczleweli/cargo-update
+- cargo-binstall: https://github.com/cargo-bins/cargo-binstall
 
 Prerequisites:
 - cargo-update must be installed: cargo install cargo-update
+- cargo-binstall (optional): cargo install cargo-binstall
 
 Update mechanism:
 - cargo install-update -l: Lists packages with available updates
-- cargo install-update -a: Updates all installed crates
+- cargo install-update -a: Updates all installed crates (uses binstall if available)
 """
 
 from __future__ import annotations
 
 import re
+import shutil
 from typing import TYPE_CHECKING
+
+import structlog
 
 from core.models import UpdateCommand
 from core.streaming import Phase
@@ -25,6 +32,8 @@ from plugins.base import BasePlugin
 
 if TYPE_CHECKING:
     from core.models import PluginConfig
+
+logger = structlog.get_logger(__name__)
 
 
 class CargoPlugin(BasePlugin):
@@ -48,7 +57,7 @@ class CargoPlugin(BasePlugin):
     @property
     def description(self) -> str:
         """Return plugin description."""
-        return "Rust Cargo package manager (requires cargo-update)"
+        return "Rust Cargo package manager (uses binstall if available)"
 
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the shell command to run for interactive mode.
@@ -93,10 +102,33 @@ class CargoPlugin(BasePlugin):
             Phase.EXECUTE: ["cargo", "install-update", "-a"],
         }
 
+    @staticmethod
+    def _parse_binstall_version(output: str) -> tuple[int, int, int]:
+        """Parse version tuple from cargo-binstall -V output."""
+        match = re.search(r"(\d+)\.(\d+)\.(\d+)", output)
+        if match:
+            return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        return (0, 0, 0)
+
+    async def _is_binstall_available(self) -> bool:
+        """Check if cargo-binstall is available (≥0.13.1)."""
+        if not shutil.which("cargo-binstall"):
+            return False
+
+        # Verify version is sufficient (≥0.13.1)
+        # Note: cargo-binstall uses -V (not --version) for version output
+        return_code, stdout, _ = await self._run_command(
+            ["cargo-binstall", "-V"],
+            timeout=5,
+            sudo=False,
+        )
+        if return_code != 0:
+            return False
+
+        return self._parse_binstall_version(stdout) >= (0, 13, 1)
+
     async def check_available(self) -> bool:
         """Check if cargo and cargo-update are available."""
-        import shutil
-
         if not shutil.which("cargo"):
             return False
 
@@ -106,7 +138,16 @@ class CargoPlugin(BasePlugin):
             timeout=10,
             sudo=False,
         )
-        return return_code == 0
+        if return_code != 0:
+            return False
+
+        # Log binstall availability (informational)
+        binstall_available = await self._is_binstall_available()
+        logger.info(
+            "cargo plugin ready",
+            binstall_available=binstall_available,
+        )
+        return True
 
     def get_update_commands(self, dry_run: bool = False) -> list[UpdateCommand]:
         """Get commands to update Cargo crates.

@@ -1,6 +1,6 @@
 [project]
 name = "update-all-plugins"
-version = "0.12.0"
+version = "0.13.0"
 description = "Plugin implementations for update-all system (apt, pipx, flatpak, etc.)"
 readme = "README.adoc"
 requires-python = ">=3.11"

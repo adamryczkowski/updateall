@@ -7,21 +7,36 @@ Official documentation:
 - Juliaup: https://github.com/JuliaLang/juliaup
 - Julia releases: https://julialang.org/downloads/
 
-Note: This plugin should run after the cargo plugin since juliaup is
-distributed via cargo (cargo install juliaup).
+Three-phase update mechanism:
+- CHECK: juliaup status - Shows installed channels and available updates
+- DOWNLOAD: Direct download from julialang.org - Downloads Julia tarball
+- EXECUTE: juliaup update - Installs the update (uses cached download if available)
+
+Auto-installation:
+- If juliaup is not installed but pipx is available, juliaup will be
+  automatically installed via `pipx install juliaup`.
+- If neither juliaup nor pipx is available, an error is returned with
+  instructions on how to install them.
+
+Note: This plugin should run after the cargo plugin since juliaup can also
+be installed via cargo (cargo install juliaup).
 """
 
 from __future__ import annotations
 
 import asyncio
+import platform
+import re
 import shutil
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import aiohttp
 
-from core.models import UpdateEstimate
-from core.streaming import CompletionEvent, EventType, OutputEvent
+from core.models import DownloadSpec, UpdateEstimate
+from core.streaming import CompletionEvent, EventType, OutputEvent, Phase
 from core.version import compare_versions
 from plugins.base import BasePlugin
 
@@ -33,9 +48,20 @@ if TYPE_CHECKING:
 
 
 class JuliaRuntimePlugin(BasePlugin):
-    """Plugin for updating Julia runtime via juliaup."""
+    """Plugin for updating Julia runtime via juliaup.
+
+    Three-phase execution:
+    1. CHECK: juliaup status - detect available updates
+    2. DOWNLOAD: Direct download from julialang.org
+    3. EXECUTE: juliaup update - install the update
+
+    Auto-installation:
+    - If juliaup is missing and pipx is available, installs juliaup via pipx
+    - If neither is available, returns an error with installation instructions
+    """
 
     GITHUB_RELEASES_URL = "https://api.github.com/repos/JuliaLang/julia/releases/latest"
+    DOWNLOAD_BASE_URL = "https://julialang-s3.julialang.org/bin"
 
     @property
     def name(self) -> str:
@@ -52,13 +78,75 @@ class JuliaRuntimePlugin(BasePlugin):
         """Return the plugin description."""
         return "Update Julia runtime via juliaup"
 
+    @property
+    def supports_download(self) -> bool:
+        """Check if this plugin supports separate download phase.
+
+        Returns:
+            True - Julia runtime plugin supports separate download.
+        """
+        return True
+
     def is_available(self) -> bool:
         """Check if juliaup is installed."""
         return shutil.which("juliaup") is not None
 
+    def _is_pipx_available(self) -> bool:
+        """Check if pipx is installed."""
+        return shutil.which("pipx") is not None
+
+    async def _ensure_juliaup_installed(self) -> tuple[bool, str]:
+        """Ensure juliaup is installed, installing via pipx if needed.
+
+        Returns:
+            Tuple of (success, message).
+            - If juliaup is already installed: (True, "juliaup is available")
+            - If installed via pipx: (True, "Installed juliaup via pipx")
+            - If installation failed: (False, error_message)
+        """
+        if self.is_available():
+            return True, "juliaup is available"
+
+        if not self._is_pipx_available():
+            return False, (
+                "juliaup is not installed and pipx is not available.\n"
+                "Please install juliaup using one of the following methods:\n"
+                "  1. Install pipx first: sudo apt install pipx\n"
+                "     Then run: pipx install juliaup\n"
+                "  2. Install via cargo: cargo install juliaup\n"
+                "  3. Install via curl: curl -fsSL https://install.julialang.org | sh\n"
+                "For more information, visit: https://github.com/JuliaLang/juliaup"
+            )
+
+        # Install juliaup via pipx
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "pipx",
+                "install",
+                "juliaup",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=120)
+            output = stdout.decode() if stdout else ""
+
+            if process.returncode == 0:
+                return True, f"Installed juliaup via pipx\n{output}"
+            else:
+                return False, f"Failed to install juliaup via pipx:\n{output}"
+        except TimeoutError:
+            return False, "Timeout while installing juliaup via pipx"
+        except Exception as e:
+            return False, f"Error installing juliaup via pipx: {e}"
+
     async def check_available(self) -> bool:
-        """Check if juliaup is available for updates."""
-        return self.is_available()
+        """Check if juliaup is available for updates.
+
+        This method will attempt to install juliaup via pipx if it's not
+        already installed.
+        """
+        success, _ = await self._ensure_juliaup_installed()
+        return success
 
     # =========================================================================
     # Version Checking Protocol Implementation
@@ -131,7 +219,7 @@ class JuliaRuntimePlugin(BasePlugin):
     async def get_update_estimate(self) -> UpdateEstimate | None:
         """Get estimated download size for Julia update.
 
-        Julia runtime is typically 100-150MB.
+        Fetches the Content-Length header from the download URL for accurate size.
 
         Returns:
             UpdateEstimate or None if no update needed.
@@ -140,14 +228,264 @@ class JuliaRuntimePlugin(BasePlugin):
         if not needs:
             return None
 
-        # Julia runtime is typically 100-150MB
+        available = await self.get_available_version()
+        if not available:
+            # Return estimate without download size
+            return UpdateEstimate(
+                download_bytes=120 * 1024 * 1024,  # ~120MB estimate
+                package_count=1,
+                packages=["julia"],
+                estimated_seconds=90,
+                confidence=0.6,
+            )
+
+        # Try to get actual download size from HEAD request
+        download_url = self._get_download_url(available)
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.head(
+                    download_url,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    content_length = resp.headers.get("Content-Length")
+                    if content_length:
+                        download_bytes = int(content_length)
+                        # Estimate ~60 seconds per 100MB
+                        estimated_seconds = max(30, int(download_bytes / 1_000_000 * 0.6))
+                        return UpdateEstimate(
+                            download_bytes=download_bytes,
+                            package_count=1,
+                            packages=[f"julia-{available}"],
+                            estimated_seconds=estimated_seconds,
+                            confidence=0.8,
+                        )
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            pass
+
+        # Fallback estimate
         return UpdateEstimate(
             download_bytes=120 * 1024 * 1024,  # ~120MB estimate
             package_count=1,
             packages=["julia"],
-            estimated_seconds=90,  # 1.5 minutes typical
-            confidence=0.6,  # Medium confidence
+            estimated_seconds=90,
+            confidence=0.6,
         )
+
+    # =========================================================================
+    # Download URL Construction
+    # =========================================================================
+
+    def _get_download_url(self, version: str) -> str:
+        """Get the download URL for a specific Julia version.
+
+        Args:
+            version: Julia version string (e.g., "1.10.0").
+
+        Returns:
+            Full download URL for the tarball.
+        """
+        # Detect OS
+        system = platform.system().lower()
+        if system == "darwin":
+            os_name = "mac"
+        elif system == "linux":
+            os_name = "linux"
+        elif system == "windows":
+            os_name = "winnt"
+        else:
+            os_name = "linux"  # Default fallback
+
+        # Detect architecture
+        machine = platform.machine().lower()
+        if machine in ("x86_64", "amd64"):
+            arch = "x64"
+        elif machine in ("aarch64", "arm64"):
+            arch = "aarch64"
+        elif machine.startswith("arm"):
+            arch = "armv7l"
+        elif machine in ("i386", "i686"):
+            arch = "x86"
+        else:
+            arch = "x64"  # Default fallback
+
+        # Extract major.minor for URL path
+        version_parts = version.split(".")
+        if len(version_parts) >= 2:
+            major_minor = f"{version_parts[0]}.{version_parts[1]}"
+        else:
+            major_minor = version
+
+        # Construct filename based on OS
+        if os_name == "mac":
+            if arch == "aarch64":
+                filename = f"julia-{version}-macaarch64.tar.gz"
+            else:
+                filename = f"julia-{version}-mac64.tar.gz"
+        elif os_name == "winnt":
+            filename = f"julia-{version}-win64.tar.gz"
+        else:
+            filename = f"julia-{version}-linux-{arch}.tar.gz"
+
+        return f"{self.DOWNLOAD_BASE_URL}/{os_name}/{arch}/{major_minor}/{filename}"
+
+    # =========================================================================
+    # Three-Phase Execution
+    # =========================================================================
+
+    def get_phase_commands(self, dry_run: bool = False) -> dict[Phase, list[str]]:
+        """Get commands for each execution phase.
+
+        Julia phases:
+        - CHECK: juliaup status - shows installed channels and available updates
+        - DOWNLOAD: Handled via get_download_spec() for direct download
+        - EXECUTE: juliaup update - installs the update
+
+        Args:
+            dry_run: If True, return commands that simulate the update.
+
+        Returns:
+            Dict mapping Phase to command list.
+        """
+        if dry_run:
+            return {
+                Phase.CHECK: ["juliaup", "status"],
+            }
+
+        return {
+            Phase.CHECK: ["juliaup", "status"],
+            # DOWNLOAD phase handled via get_download_spec()
+            Phase.EXECUTE: ["juliaup", "update"],
+        }
+
+    async def get_download_spec(self) -> DownloadSpec | None:
+        """Get the download specification for Julia runtime.
+
+        This method uses the Centralized Download Manager API to specify
+        the download URL, destination, and extraction settings.
+
+        Returns:
+            DownloadSpec with URL and settings, or None if no update needed.
+        """
+        # Check if update is needed
+        if not await self.needs_update():
+            return None
+
+        # Get the remote version
+        remote_version = await self.get_available_version()
+        if not remote_version:
+            return None
+
+        # Get download URL
+        download_url = self._get_download_url(remote_version)
+
+        # Create a temporary directory for the download
+        download_path = Path(tempfile.gettempdir()) / f"julia-{remote_version}.tar.gz"
+
+        # Try to get expected size
+        expected_size = None
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.head(
+                    download_url,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    content_length = resp.headers.get("Content-Length")
+                    if content_length:
+                        expected_size = int(content_length)
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            pass
+
+        return DownloadSpec(
+            url=download_url,
+            destination=download_path,
+            expected_size=expected_size,
+            extract=False,  # Let juliaup handle extraction
+            timeout_seconds=600,  # 10 minutes for large download
+        )
+
+    async def download(self) -> AsyncIterator[StreamEvent]:
+        """Download Julia runtime update.
+
+        This method handles the download phase. If no update is needed,
+        it reports success without downloading anything.
+
+        Yields:
+            StreamEvent objects with download progress.
+        """
+        # Check if update is needed
+        needs = await self.needs_update()
+
+        if needs is None:
+            # Cannot determine if update is needed
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line="Cannot determine if Julia update is needed",
+                stream="stderr",
+            )
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=1,
+                error_message="Cannot determine if Julia update is needed",
+            )
+            return
+
+        if not needs:
+            # No update needed
+            installed = await self.get_installed_version()
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line=f"Julia is up-to-date (version {installed})",
+                stream="stdout",
+            )
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=True,
+                exit_code=0,
+                packages_updated=0,
+            )
+            return
+
+        # Get download spec and use the download manager
+        spec = await self.get_download_spec()
+        if not spec:
+            yield OutputEvent(
+                event_type=EventType.OUTPUT,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                line="Failed to get download specification",
+                stream="stderr",
+            )
+            yield CompletionEvent(
+                event_type=EventType.COMPLETION,
+                plugin_name=self.name,
+                timestamp=datetime.now(tz=UTC),
+                success=False,
+                exit_code=1,
+                error_message="Failed to get download specification",
+            )
+            return
+
+        # Use the download manager for actual download
+        from core.download_manager import get_download_manager
+
+        download_manager = get_download_manager()
+        async for event in download_manager.download_streaming(spec, plugin_name=self.name):
+            yield event
 
     # =========================================================================
     # Legacy API (for backward compatibility)
@@ -203,6 +541,25 @@ class JuliaRuntimePlugin(BasePlugin):
 
         return count
 
+    def _parse_status_for_updates(self, output: str) -> list[str]:
+        """Parse juliaup status output to find available updates.
+
+        Args:
+            output: Output from juliaup status command.
+
+        Returns:
+            List of channels with available updates.
+        """
+        updates = []
+        for line in output.split("\n"):
+            # Look for "Update to X.Y.Z available" pattern
+            if "update" in line.lower() and "available" in line.lower():
+                # Extract channel name from the line
+                match = re.search(r"^[*\s]*(\S+)", line)
+                if match:
+                    updates.append(match.group(1))
+        return updates
+
     def get_interactive_command(self, dry_run: bool = False) -> list[str]:
         """Get the interactive command for Julia runtime update.
 
@@ -227,9 +584,12 @@ class JuliaRuntimePlugin(BasePlugin):
         """
         output_lines: list[str] = []
 
-        # Check if juliaup is installed
-        if not self.is_available():
-            return "juliaup not installed, skipping Julia runtime update", None
+        # Ensure juliaup is installed (auto-install via pipx if needed)
+        success, message = await self._ensure_juliaup_installed()
+        output_lines.append(message)
+
+        if not success:
+            return "\n".join(output_lines), message
 
         local_version = self.get_local_version()
         if local_version:
@@ -270,21 +630,25 @@ class JuliaRuntimePlugin(BasePlugin):
         Yields:
             StreamEvent objects from the update process.
         """
-        # Check if juliaup is installed
-        if not self.is_available():
-            yield OutputEvent(
-                event_type=EventType.OUTPUT,
-                plugin_name=self.name,
-                timestamp=datetime.now(tz=UTC),
-                line="juliaup not installed, skipping Julia runtime update",
-                stream="stdout",
-            )
+        # Ensure juliaup is installed (auto-install via pipx if needed)
+        success, message = await self._ensure_juliaup_installed()
+
+        yield OutputEvent(
+            event_type=EventType.OUTPUT,
+            plugin_name=self.name,
+            timestamp=datetime.now(tz=UTC),
+            line=message,
+            stream="stdout" if success else "stderr",
+        )
+
+        if not success:
             yield CompletionEvent(
                 event_type=EventType.COMPLETION,
                 plugin_name=self.name,
                 timestamp=datetime.now(tz=UTC),
-                success=True,
-                exit_code=0,
+                success=False,
+                exit_code=1,
+                error_message=message,
             )
             return
 
